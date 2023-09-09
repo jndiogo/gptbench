@@ -1,0 +1,10 @@
+.ipynb_checkpoints/
+__pycache__/
+*.swp
+.env
+.pylintrc
+*.egg-info
+
+projects/data/*
+!projects/data/*.py
+projects/out/
