@@ -76,7 +76,7 @@ class Trainer:
     def epoch_from_iter_num(self):
         return self.iter_num * self.config.batch_size / len(self.train_dataset)
 
-    def batch_count_for_epoch(self):
+    def batches_for_epoch(self):
         return len(self.train_dataset) / self.config.batch_size
 
     def set_optimizer_state_dict(self, state_dict):
@@ -88,6 +88,7 @@ class Trainer:
 
     def run(self):
         model, config = self.model, self.config
+
 
         if self.optimizer is None:
             self.optimizer = model.configure_optimizers(config)
@@ -125,11 +126,15 @@ class Trainer:
             # backprop and update the parameters
             model.zero_grad(set_to_none=True)
             self.loss.backward()
+
             torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_norm_clip)
+
             self.optimizer.step()
 
             self.trigger_callbacks('on_batch_end')
+            
             self.iter_num += 1
+
             tnow = time.time()
             self.iter_dt = tnow - self.iter_time
             self.iter_time = tnow

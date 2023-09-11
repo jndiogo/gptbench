@@ -80,6 +80,18 @@ def top_p(logits, top_p, min_tokens_to_keep=1):
 class CfgNode:
     """ a lightweight configuration class inspired by yacs """
 
+
+    @staticmethod
+    def from_sysargv(sys_argv, key_must_exist):
+
+        argv = sys_argv[1:]
+
+        c = empty_config()
+        c.merge_from_args(argv, key_must_exist=key_must_exist)
+
+        return c
+
+
     def __init__(self, **kwargs):
         self.__dict__.update(kwargs)
 

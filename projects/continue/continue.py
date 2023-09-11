@@ -1,5 +1,4 @@
 """
-Trains a token-level language model.
 """
 
 import sys

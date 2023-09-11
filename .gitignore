@@ -7,4 +7,6 @@ __pycache__/
 
 projects/data/*
 !projects/data/*.py
-projects/out/
+
+out/
+
