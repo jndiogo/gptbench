@@ -30,7 +30,7 @@ class Trainer:
         # optimizer parameters
         c.opti = 1 # 0: SGD, 1: AdamW
 
-        c.learning_rate = 3e-4 #5e-4? @TODO: find reasonable value. "the model we're using is so small that we can go a bit faster"
+        c.learning_rate = 1e-4 #5e-4? @TODO: find reasonable value. "the model we're using is so small that we can go a bit faster"
 
         # these are for AdamW optimizer
         c.adamw_betas = (0.9, 0.95)
@@ -41,7 +41,7 @@ class Trainer:
 
     @staticmethod
     def checkpoint_config_keys():
-        return ["batch_size", "max_iters", "batch_size", "opti", "learning_rate", "adamw_betas", "adamw_weight_decay", "grad_norm_clip"]
+        return ["batch_size", "max_iters", "opti", "learning_rate", "adamw_betas", "adamw_weight_decay", "grad_norm_clip"]
 
 
     def __init__(self, config, model, dataset, 
@@ -89,7 +89,6 @@ class Trainer:
     def run(self):
         model, config = self.model, self.config
 
-
         if self.optimizer is None:
             self.optimizer = model.configure_optimizers(config)
 
@@ -121,11 +120,11 @@ class Trainer:
             x, y = batch
 
             # forward the model
-            logits, self.loss = model(x, y)
+            logits, loss = model(x, y)
 
             # backprop and update the parameters
             model.zero_grad(set_to_none=True)
-            self.loss.backward()
+            loss.backward()
 
             torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_norm_clip)
 

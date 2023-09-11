@@ -11,17 +11,21 @@ from torch.utils.data.dataloader import DataLoader
 from gptbench.model import GPT
 from gptbench.trainer import Trainer
 from gptbench.dataset import GPT2TokensDataset, DatasetBase
-from gptbench.utils import CfgNode, set_seed, last_config_save, die, print_sepline
+from gptbench.utils import CfgNode, set_seed, last_config_save, die, print_sepline, cuda_max_memory_init, cuda_max_memory_print
+from gptbench.sample import sample
 
 
 # -----------------------------------------------------------------------------
 CHECKPOINT_VERSION = 1
 
-def checkpoint_load(path_prefix):
+def checkpoint_load(path_prefix, load_optimizer_state):
     """ """
 
     model_state_dict = torch.load(path_prefix + ".pt")
-    optimizer_state_dict = torch.load(path_prefix + ".opti")
+    if load_optimizer_state:
+        optimizer_state_dict = torch.load(path_prefix + ".opti")
+    else:
+        optimizer_state_dict = None
 
     with open(path_prefix + '.json', 'r', encoding='utf-8') as f:
         js = f.read()
@@ -31,7 +35,9 @@ def checkpoint_load(path_prefix):
             j['model'], 
             j['trainer'],
             j['dataset'],
-            j['eval'], j['eval_iters'], j['_iter_num'], j['_loss'] )
+            j['eval'], j['eval_iters'],
+             j['eval_period'], j['eval_sample_period'],
+            j['_iter_num'], j['_loss'] )
 
 
 
@@ -40,17 +46,24 @@ def checkpoint_save(path_prefix,
                     model_config_dict,
                     trainer_config_dict,
                     dataset_config_dict,
-                    eval, eval_iters, _iter_num, _loss):
+                    eval, eval_iters, eval_period, eval_sample_period,
+                    _iter_num, _loss):
+
+    # no CTRL+C interruptions while saving, please (malformed checkpoint files)
+    original_sigint = signal.getsignal(signal.SIGINT)
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+
 
     torch.save(model.state_dict(), path_prefix + ".pt")
     torch.save(optimizer.state_dict(), path_prefix + ".opti")
 
-    config_info = {'version': CHECKPOINT_VERSION,
+    config_info = {'_version': CHECKPOINT_VERSION,
+                   '_iter_num': _iter_num, '_loss': _loss,
                    'model': model_config_dict,
                    'trainer': trainer_config_dict,
                    'dataset': dataset_config_dict,
-                   'eval': eval, 'eval_iters': eval_iters,
-                   '_iter_num': _iter_num, '_loss': _loss                   
+                   'eval': eval, 'eval_iters': eval_iters, 
+                    'eval_period': eval_period, 'eval_sample_period': eval_sample_period,
                    }
 
     json_str = json.dumps(config_info, indent=4)
@@ -58,6 +71,8 @@ def checkpoint_save(path_prefix,
     with open(path_prefix + '.json', 'w', encoding='utf-8') as f:
         f.write(json_str)
 
+    # restore original handler
+    signal.signal(signal.SIGINT, original_sigint)
 
 
 # -----------------------------------------------------------------------------
@@ -153,7 +168,7 @@ def train(config, trainer, start_loss=float('inf')):
                                     config.trainer.to_dict(False, Trainer.checkpoint_config_keys()),
                                     config.dataset.to_dict(False, DatasetBase.checkpoint_config_keys()),
                                     
-                                    config.eval, config.eval_iters, 
+                                    config.eval, config.eval_iters, config.eval_period, config.eval_sample_period,
                                     iter_num, loss)
 
                     last_saved_loss = loss
@@ -172,7 +187,14 @@ def train(config, trainer, start_loss=float('inf')):
 
         print('.', end='', flush=True)
 
+
+        cuda_max_memory_print()
+
+
+
     trainer.set_callback('on_batch_end', batch_end_callback)
+
+    cuda_max_memory_init()
 
     # run the optimization
     trainer.run()

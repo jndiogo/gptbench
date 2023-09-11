@@ -1,4 +1,4 @@
-import os, sys, random, json
+import os, sys, random, json, gc
 
 import torch
 from torch.nn import functional as F
@@ -149,10 +149,14 @@ class CfgNode:
         self.__dict__.update(d)
 
 
-    def merge_from_config(self, other_config):
+    def merge_from_config(self, other_config, only_root_keys=None):
         """ copies all keys from other_config, then recurses into existing CfgNodes that both have """
 
         for k, v in other_config.__dict__.items():
+
+            if only_root_keys is not None:
+                if k not in only_root_keys:
+                    continue
 
             if isinstance(v, CfgNode) and hasattr(self,k) and isinstance(getattr(self,k), CfgNode):
                 getattr(self,k).merge_from_config(v)
@@ -249,3 +253,22 @@ def is_utf8(buffer_or_str):
 
 def print_sepline():
     print('-' * 80)
+
+
+
+def cuda_max_memory_init():
+    if not torch.cuda.is_available(): return
+
+    gc.collect()
+    torch.cuda.empty_cache()
+    torch.cuda.reset_peak_memory_stats()
+    torch.cuda.synchronize()
+
+def cuda_max_memory_print():
+    if not torch.cuda.is_available(): return
+
+    torch.cuda.synchronize()
+    b = torch.cuda.max_memory_allocated()
+    print(f"CUDA max memory used: {b/1e6:.2f}M")
+
+    cuda_max_memory_init()

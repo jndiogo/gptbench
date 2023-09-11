@@ -106,15 +106,19 @@ class GPT(nn.Module):
         c = CfgNode()
 
         # device to run on
-        c.device = 'auto'
+        c.device = 'auto' # cuda, cpu
+        c.dtype = 'float32' # float32, float16, bfloat16
+
         # either model_type or (n_layer, n_head, n_embd) must be given in the config
         c.model_type = None
         c.n_layer = None
         c.n_head = None
         c.n_embd =  None
+        
         # these options must be filled in externally
         c.vocab_size = None
         c.block_size = None
+        
         # dropout hyperparameter
         c.dropout = 0.1
 
@@ -122,7 +126,65 @@ class GPT(nn.Module):
 
     @staticmethod
     def checkpoint_config_keys():
-        return ["n_layer", "n_head", "n_embd", "vocab_size", "block_size", "dropout"]
+        return ["n_layer", "n_head", "n_embd", "vocab_size", "block_size", "dropout", "dtype"]
+
+
+    @classmethod
+    def from_pretrained(cls, model_type, model_config_override=None):
+        """
+        Initialize a pretrained GPT model by copying over the weights
+        from a huggingface/transformers checkpoint.
+        """
+        assert model_type in {'gpt2', 'gpt2-medium', 'gpt2-large', 'gpt2-xl'}
+
+        # create a from-scratch initialized minGPT model
+        config = cls.get_default_config()
+        config.model_type = model_type
+        config.vocab_size = 50257 # openai's model vocabulary
+        config.block_size = 1024  # openai's model block_size
+
+        if model_config_override is not None:
+            config.merge_from_config(model_config_override, 
+                                     ["dropout", "device", "dtype"])
+
+        model = GPT(config)
+
+        sd = model.state_dict()
+        sd_keys = sd.keys()
+        sd_keys = [k for k in sd_keys if not k.endswith('.attn.bias')] # discard this mask / buffer, not a param
+
+
+        # init a huggingface/transformers model
+        from transformers import GPT2LMHeadModel
+        model_hf = GPT2LMHeadModel.from_pretrained(model_type)
+        sd_hf = model_hf.state_dict()
+
+        # copy while ensuring all of the parameters are aligned and match in names and shapes
+        sd_keys_hf = sd_hf.keys()
+        sd_keys_hf = [k for k in sd_keys_hf if not k.endswith('.attn.masked_bias')] # ignore: buffer
+        sd_keys_hf = [k for k in sd_keys_hf if not k.endswith('.attn.bias')] # same, just the mask (buffer)
+
+        transposed = ['attn.c_attn.weight', 'attn.c_proj.weight', 'mlp.c_fc.weight', 'mlp.c_proj.weight']
+
+        # basically the openai checkpoints use a "Conv1D" module, but we only want to use a vanilla nn.Linear.
+        # this means that we have to transpose these weights when we import them
+        assert len(sd_keys) == len(sd_keys_hf), f"mismatched keys: {len(sd_keys)} != {len(sd_keys_hf)}"
+
+        for k in sd_keys_hf:
+
+            if any(k.endswith(w) for w in transposed):
+                # special treatment for the Conv1D weights we need to transpose
+                assert sd_hf[k].shape[::-1] == sd[k].shape
+                with torch.no_grad():
+                    sd[k].copy_(sd_hf[k].t())
+            else:
+                # vanilla copy over the other parameters
+                assert sd_hf[k].shape == sd[k].shape
+                with torch.no_grad():
+                    sd[k].copy_(sd_hf[k])
+
+        return model, config
+
 
 
 
@@ -137,7 +199,9 @@ class GPT(nn.Module):
             self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         else:
             self.device = config.device
-        #self.model = self.model.to(self.device)
+
+        # 'float16': torch.float16 not used to avoid complications with smaller exponent range
+        self.dtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16}[config.dtype]
 
 
         type_given = config.model_type is not None
@@ -181,64 +245,7 @@ class GPT(nn.Module):
         # report number of parameters (note we don't count the decoder parameters in lm_head)
         self.n_params = sum(p.numel() for p in self.transformer.parameters())
 
-        self.to(self.device)
-
-
-    @classmethod
-    def from_pretrained(cls, model_type, model_config_override=None):
-        """
-        Initialize a pretrained GPT model by copying over the weights
-        from a huggingface/transformers checkpoint.
-        """
-        assert model_type in {'gpt2', 'gpt2-medium', 'gpt2-large', 'gpt2-xl'}
-
-        # create a from-scratch initialized minGPT model
-        config = cls.get_default_config()
-        config.model_type = model_type
-        config.vocab_size = 50257 # openai's model vocabulary
-        config.block_size = 1024  # openai's model block_size
-
-        if model_config_override is not None:
-            config.dropout = model_config_override.dropout
-            config.device = model_config_override.device
-
-        model = GPT(config)
-
-        sd = model.state_dict()
-        sd_keys = sd.keys()
-        sd_keys = [k for k in sd_keys if not k.endswith('.attn.bias')] # discard this mask / buffer, not a param
-
-
-        # init a huggingface/transformers model
-        from transformers import GPT2LMHeadModel
-        model_hf = GPT2LMHeadModel.from_pretrained(model_type)
-        sd_hf = model_hf.state_dict()
-
-        # copy while ensuring all of the parameters are aligned and match in names and shapes
-        sd_keys_hf = sd_hf.keys()
-        sd_keys_hf = [k for k in sd_keys_hf if not k.endswith('.attn.masked_bias')] # ignore: buffer
-        sd_keys_hf = [k for k in sd_keys_hf if not k.endswith('.attn.bias')] # same, just the mask (buffer)
-
-        transposed = ['attn.c_attn.weight', 'attn.c_proj.weight', 'mlp.c_fc.weight', 'mlp.c_proj.weight']
-
-        # basically the openai checkpoints use a "Conv1D" module, but we only want to use a vanilla nn.Linear.
-        # this means that we have to transpose these weights when we import them
-        assert len(sd_keys) == len(sd_keys_hf), f"mismatched keys: {len(sd_keys)} != {len(sd_keys_hf)}"
-
-        for k in sd_keys_hf:
-
-            if any(k.endswith(w) for w in transposed):
-                # special treatment for the Conv1D weights we need to transpose
-                assert sd_hf[k].shape[::-1] == sd[k].shape
-                with torch.no_grad():
-                    sd[k].copy_(sd_hf[k].t())
-            else:
-                # vanilla copy over the other parameters
-                assert sd_hf[k].shape == sd[k].shape
-                with torch.no_grad():
-                    sd[k].copy_(sd_hf[k])
-
-        return model, config
+        self.to(device=self.device, dtype=self.dtype)
 
 
 

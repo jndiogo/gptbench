@@ -23,28 +23,28 @@ class DatasetBase(Dataset):
         c.path = None # default '' means dummy dataset with one sample, for sampling (for token encode/decode)
         c.train = None
         c.val = None
-        c.trainsplit = 0.9
+        c.train_split = 0.9
 
         return c
 
     @staticmethod
     def checkpoint_config_keys():
-        return ["path", "trainsplit"]
+        return ["path", "train_split"]
 
 
     @staticmethod
-    def create_train_val_datasets(block_size, cls, trainsplit, data=None, data_path=None):
-        """ returns train_dataset, val_dataset - val dataset can be None if trainsplit=1. """
+    def create_train_val_datasets(block_size, cls, train_split, data=None, data_path=None):
+        """ returns train_dataset, val_dataset - val dataset can be None if train_split=1. """
 
-        assert trainsplit is not None and trainsplit > 0. and trainsplit <= 1., "0 < trainsplit <= 1"
+        assert train_split is not None and train_split > 0. and train_split <= 1., "0 < train_split <= 1"
 
         data = cls.load_data(block_size, data=data, data_path=data_path, verbose=True)
 
         # deal with dummy dataset: return copies of data
         if data is None and data_path is None:
-            return data, copy.copy(data) if trainsplit < 1. else None
+            return data, copy.copy(data) if train_split < 1. else None
 
-        split_index = int(len(data) * trainsplit)
+        split_index = int(len(data) * train_split)
 
         train = cls(block_size, data=data[:split_index])
 
