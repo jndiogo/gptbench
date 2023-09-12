@@ -15,6 +15,37 @@ from gptbench.utils import CfgNode, set_seed, last_config_save, die, print_sepli
 from gptbench.sample import sample
 
 
+
+
+# -----------------------------------------------------------------------------
+def train_get_default_config():
+
+    # train.*
+    c = CfgNode()
+
+    c.start_iter_num = 0
+    c.start_loss = float('inf')
+
+    # c.log_period = 10 # simple forward pass loss log
+
+    c.eval_period = 100 # each n batches we eval and check if saving model
+    c.eval = 2 # how to estimate loss -> 1: on test data, 2: on val data (or test if no val dataset), 1|2=3: mean(test,val)
+    c.eval_iters = 100
+    c.eval_save_checkpt = 1 # 0=never, 1=on lower loss, 2=always
+
+    c.sample_period = 1000
+
+    return c
+
+
+def train_checkpoint_config_keys():
+    return ["eval_period", "eval", "eval_iters", "sample_period", "start_iter_num", "start_loss"]
+
+
+
+
+
+
 # -----------------------------------------------------------------------------
 CHECKPOINT_VERSION = 1
 
@@ -32,22 +63,21 @@ def checkpoint_load(path_prefix, load_optimizer_state):
     j = json.loads(js)
 
     return (model_state_dict, optimizer_state_dict, 
+
+            j['train'], 
             j['model'], 
             j['trainer'],
-            j['dataset'],
-            j['eval'], j['eval_iters'],
-             j['eval_period'], j['eval_sample_period'],
-            j['_iter_num'], j['_loss'] )
+            j['dataset'] )
 
 
 
 def checkpoint_save(path_prefix, 
                     model, optimizer, 
+
+                    train_config_dict,
                     model_config_dict,
                     trainer_config_dict,
-                    dataset_config_dict,
-                    eval, eval_iters, eval_period, eval_sample_period,
-                    _iter_num, _loss):
+                    dataset_config_dict):
 
     # no CTRL+C interruptions while saving, please (malformed checkpoint files)
     original_sigint = signal.getsignal(signal.SIGINT)
@@ -58,12 +88,10 @@ def checkpoint_save(path_prefix,
     torch.save(optimizer.state_dict(), path_prefix + ".opti")
 
     config_info = {'_version': CHECKPOINT_VERSION,
-                   '_iter_num': _iter_num, '_loss': _loss,
+                   'train': train_config_dict,
                    'model': model_config_dict,
                    'trainer': trainer_config_dict,
-                   'dataset': dataset_config_dict,
-                   'eval': eval, 'eval_iters': eval_iters, 
-                    'eval_period': eval_period, 'eval_sample_period': eval_sample_period,
+                   'dataset': dataset_config_dict
                    }
 
     json_str = json.dumps(config_info, indent=4)
@@ -71,8 +99,10 @@ def checkpoint_save(path_prefix,
     with open(path_prefix + '.json', 'w', encoding='utf-8') as f:
         f.write(json_str)
 
+
     # restore original handler
     signal.signal(signal.SIGINT, original_sigint)
+
 
 
 # -----------------------------------------------------------------------------
@@ -115,15 +145,33 @@ def estimate_loss(train_dataset, val_dataset, model, batch_size, iters):
 
 
 # -----------------------------------------------------------------------------
-def train(config, trainer, start_loss=float('inf')):
+def train(config, model, trainer = None, optimizer_state_dict = None):
     """config is global config """
 
-    assert (config.eval & 3) != 0, "config.eval must be set to 1, 2 or 1|2"
 
-    model = trainer.model
+    if trainer is None:
+        # construct the trainer object
+        trainer = Trainer(config.trainer, model, config.dataset, start_iter_num=config.train.start_iter_num)
+
+
+    if optimizer_state_dict is not None:
+        print("Resuming optimizer state")
+        trainer.set_optimizer_state_dict(optimizer_state_dict)
+
+    print(f"Batches per epoch: {int(trainer.batches_for_epoch())}")
+
+    # only worth checking for training
+    if config.dataset.val is None: # no validations dataset?
+        config.train.eval &= 1 # clear val bit
+    if config.train.eval & 3 == 0: # force at least train
+        config.train.eval = 1
+
+
+    assert (config.train.eval & 3) != 0, "config.train.eval must be set to 1, 2 or 1|2"
+
     train_dataset = trainer.train_dataset
 
-    last_saved_loss = start_loss
+    last_saved_loss = config.train.start_loss
 
     # iteration callback
     def batch_end_callback(trainer):
@@ -136,19 +184,19 @@ def train(config, trainer, start_loss=float('inf')):
 
             model_evaluated = False
 
-            if iter_num % config.eval_period == 0: # evaluate loss 
+            if iter_num % config.train.eval_period == 0: # evaluate loss 
 
                 train_loss, val_loss = estimate_loss(
                     train_dataset,
                     config.dataset.val,
                     model,
                     trainer.config.batch_size,
-                    config.eval_iters)
+                    config.train.eval_iters)
 
-                if config.eval & 3 == 3:
+                if config.train.eval & 3 == 3:
                     loss = (train_loss + val_loss) / 2.
                 else:
-                    loss = val_loss if (config.eval & 2) and val_loss else train_loss
+                    loss = val_loss if (config.train.eval & 2) and val_loss else train_loss
 
                 val_loss = val_loss if val_loss is not None else float('inf')
 
@@ -157,26 +205,30 @@ def train(config, trainer, start_loss=float('inf')):
                 model_evaluated = True
 
 
-                if loss < last_saved_loss: # save a checkpoint
+                if (config.train.eval_save_checkpt == 1 and loss < last_saved_loss) \
+                   or config.train.eval_save_checkpt == 2: # save a checkpoint
 
                     print(f"==> Saving model at loss={loss:.4f} iter={iter_num}")
 
+                    train_config = copy.copy(config.train)
+                    train_config.start_iter_num = iter_num
+                    train_config.start_loss = loss
+
                     checkpoint_save(config._model_path_prefix, 
                                     model, trainer.optimizer,
-                                    
+
+                                    train_config.to_dict(False, train_checkpoint_config_keys()),
                                     config.model.to_dict(False, GPT.checkpoint_config_keys()), 
                                     config.trainer.to_dict(False, Trainer.checkpoint_config_keys()),
-                                    config.dataset.to_dict(False, DatasetBase.checkpoint_config_keys()),
-                                    
-                                    config.eval, config.eval_iters, config.eval_period, config.eval_sample_period,
-                                    iter_num, loss)
+                                    config.dataset.to_dict(False, DatasetBase.checkpoint_config_keys())
+                                    )
 
                     last_saved_loss = loss
 
 
-            if iter_num % config.eval_sample_period == 0:
+            if iter_num % config.train.sample_period == 0:
                 # evaluate both the train and test score
-                sample(config.sampler, model, train_dataset)
+                sample(config.sample, model, train_dataset)
 
                 model_evaluated = True
 

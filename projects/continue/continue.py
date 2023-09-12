@@ -12,16 +12,16 @@ if __name__ == '__main__':
 
     c = common.empty_config()
 
+    # sample
+    c.sample.eotstop = 1
+    c.sample.multiline = 0
+
     # dataset
     c.dataset.cls = GPT2TokensDataset
 
     # model
 
     # trainer
-
-    # sampler
-    c.sampler.eotstop = 1
-    c.sampler.multiline = 0
 
 
 

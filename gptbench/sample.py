@@ -16,26 +16,39 @@ from gptbench.utils import CfgNode, set_seed, last_config_save, die, print_sepli
 
 
 
+
+# -----------------------------------------------------------------------------
+def sample_get_default_config():
+    
+    # sample.*
+    c = CfgNode()
+
+    c.count = 1
+    c.len = 400
+    c.start = ' '
+    c.pertoken = 1 # display each token immediately
+    c.eotstop = 0 # 0 don't stop, -1 stop before, 1 stop after (and display it)
+    c.top = 40 # 0..1: top_p, > 1: top_k
+    c.temp = 1. # temperature
+    c.multiline = 0 # input multiple lines until a Ctrl+D or Ctrl+Z (in Windows)
+
+    return c
+
+
+
 # -----------------------------------------------------------------------------
 @torch.no_grad()
-def sample(sampler_config, model, train_dataset, stop_asap=None):
+def sample(sample_config, model, train_dataset, stop_asap=None):
     """ stop_asap=[False] - when set to True, must break and return """
 
-    count=sampler_config.count
-    length=sampler_config.len
-    context=sampler_config.start
-    top=sampler_config.top
-    temp=sampler_config.temp
-    token_emit=sampler_config.pertoken
-    eotstop=sampler_config.eotstop
     eot_token = train_dataset.get_eot_token()
 
     model.eval()
 
-    ix = train_dataset.encode(context)    
+    ix = train_dataset.encode(sample_config.start)    
     x = torch.tensor(ix, dtype=torch.long).to(model.device)
 
-    if token_emit:
+    if sample_config.pertoken:
 
         def emit(idx):
 
@@ -43,13 +56,13 @@ def sample(sampler_config, model, train_dataset, stop_asap=None):
 
             is_eot = idx[0] == eot_token
 
-            if is_eot and eotstop==-1:
+            if is_eot and sample_config.eotstop==-1:
                 return -1
 
             chars = train_dataset.bufd_decode(idx)
             print(chars, sep='', end='', flush=True)
 
-            if is_eot and eotstop==1:
+            if is_eot and sample_config.eotstop==1:
                 return -1
 
             return 0
@@ -57,12 +70,12 @@ def sample(sampler_config, model, train_dataset, stop_asap=None):
 
         x = x.repeat([1, 1])
 
-        for _ in range(count):
+        for _ in range(sample_config.count):
             print_sepline()
-            print(context, sep='', end='')
+            print(sample_config.start, sep='', end='')
 
-            model.generate(x, length, temperature=temp, do_sample=True, top=top, 
-                           token_callback = emit if token_emit else None,
+            model.generate(x, sample_config.len, temperature=sample_config.temp, do_sample=True, top=sample_config.top, 
+                           token_callback = emit if sample_config.pertoken else None,
                            stop_asap=stop_asap)
 
             if stop_asap is not None and stop_asap[0]:
@@ -76,9 +89,9 @@ def sample(sampler_config, model, train_dataset, stop_asap=None):
 
 
     else:
-        x = x.repeat([count, 1])
-        y = model.generate(x, length, temperature=temp, do_sample=True, top=top, 
-                           token_callback = emit if token_emit else None,
+        x = x.repeat([sample_config.count, 1])
+        y = model.generate(x, sample_config.len, temperature=sample_config.temp, do_sample=True, top=sample_config.top, 
+                           token_callback = emit if sample_config.pertoken else None,
                            stop_asap=stop_asap)
 
         if stop_asap is not None and stop_asap[0]:
@@ -87,10 +100,10 @@ def sample(sampler_config, model, train_dataset, stop_asap=None):
         for ir in range(y.size(0)):
             row = y[ir,:].tolist()
 
-            if eotstop:
+            if sample_config.eotstop:
               index = row.index(eot_token)
               if index >= 0:
-                row = row[:index if eotstop==-1 else index+1]
+                row = row[:index if sample_config.eotstop==-1 else index+1]
 
             completion = train_dataset.decode(row)
 
@@ -124,10 +137,10 @@ def prompt(config, model, train_dataset):
     ]
 
 
-    sampler_config = config.sampler
+    sample_config = config.sample
 
-    sampler_config = copy.copy(sampler_config)
-    sampler_config.token_emit = 1
+    sample_config = copy.copy(sample_config)
+    sample_config.pertoken = 1
 
 
     stop_asap = [False]
@@ -145,7 +158,7 @@ def prompt(config, model, train_dataset):
 
     while True:
         p = ''
-        if sampler_config.multiline:
+        if sample_config.multiline:
             prompt='V\n'
         else:
             prompt='> '
@@ -156,7 +169,7 @@ def prompt(config, model, train_dataset):
             except EOFError:
                 break
 
-            if not sampler_config.multiline:
+            if not sample_config.multiline:
                 break
             else:
                 p += '\n'
@@ -201,18 +214,18 @@ def prompt(config, model, train_dataset):
                     print(config)
                 else:
                     cmd_list = [ '-' + k + '=' + v ]
-                    sampler_config.merge_from_args(cmd_list, key_must_exist=True)
+                    sample_config.merge_from_args(cmd_list, key_must_exist=True)
 
             if quit:
                 break
         else:
             p = p.replace("\\n", "\n")
-            sampler_config.start=p
+            sample_config.start=p
 
             stop_asap = [False]
             signal.signal(signal.SIGINT, signal_handler)
 
-            sample(sampler_config, model, train_dataset, stop_asap=stop_asap)
+            sample(sample_config, model, train_dataset, stop_asap=stop_asap)
 
             signal.signal(signal.SIGINT, original_sigint)
 
