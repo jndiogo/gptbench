@@ -61,7 +61,6 @@ def default_full_config():
 
     c.seed = 0 # 0 means random seed
 
-
     # sample
     c.sample = sample_get_default_config()
 

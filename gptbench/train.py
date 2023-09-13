@@ -26,20 +26,22 @@ def train_get_default_config():
     c.start_iter_num = 0
     c.start_loss = float('inf')
 
-    # c.log_period = 10 # simple forward pass loss log
+    c.log_period = -10 # simple forward pass loss log. Negative numbers mean max(1, int(eval_period/-log_period))
 
-    c.eval_period = 100 # each n batches we eval and check if saving model
-    c.eval = 2 # how to estimate loss -> 1: on test data, 2: on val data (or test if no val dataset), 1|2=3: mean(test,val)
+    c.eval_period = 100 # each n batches we eval and check if saving model. 0 for none
+    c.eval_type = 2 # how to estimate loss -> 1: on test data, 2: on val data (or test if no val dataset), 1|2=3: mean(test,val)
     c.eval_iters = 100
     c.eval_save_checkpt = 1 # 0=never, 1=on lower loss, 2=always
 
-    c.sample_period = 1000
+    c.sample_period = 1000 # when to sample. 0 for never
+
+    c.debug = 0 # 0: none, 1: log cuda peak used memory on each evaluation
 
     return c
 
 
 def train_checkpoint_config_keys():
-    return ["eval_period", "eval", "eval_iters", "sample_period", "start_iter_num", "start_loss"]
+    return ["eval_period", "eval_type", "eval_iters", "sample_period", "start_iter_num", "start_loss"]
 
 
 
@@ -148,10 +150,15 @@ def estimate_loss(train_dataset, val_dataset, model, batch_size, iters):
 def train(config, model, trainer = None, optimizer_state_dict = None):
     """config is global config """
 
+    if config.train.debug & 1:
+        cuda_max_memory_init()
+
 
     if trainer is None:
         # construct the trainer object
         trainer = Trainer(config.trainer, model, config.dataset, start_iter_num=config.train.start_iter_num)
+
+        print(config.trainer, trainer.get_start_iter_num())
 
 
     if optimizer_state_dict is not None:
@@ -162,16 +169,22 @@ def train(config, model, trainer = None, optimizer_state_dict = None):
 
     # only worth checking for training
     if config.dataset.val is None: # no validations dataset?
-        config.train.eval &= 1 # clear val bit
-    if config.train.eval & 3 == 0: # force at least train
-        config.train.eval = 1
+        config.train.eval_type &= 1 # clear val bit
+    if config.train.eval_type & 3 == 0: # force at least train
+        config.train.eval_type = 1
 
-
-    assert (config.train.eval & 3) != 0, "config.train.eval must be set to 1, 2 or 1|2"
+    assert (config.train.eval_type & 3) != 0, "config.train.eval_type must be set to 1, 2 or 1|2"
 
     train_dataset = trainer.train_dataset
 
     last_saved_loss = config.train.start_loss
+
+
+    if config.train.log_period < 0:
+        log_period = max(1, int(config.train.eval_period/-config.train.log_period))
+    else:
+        log_period = config.train.log_period
+
 
     # iteration callback
     def batch_end_callback(trainer):
@@ -179,12 +192,15 @@ def train(config, model, trainer = None, optimizer_state_dict = None):
 
         iter_num = trainer.iter_num
 
+        if log_period and iter_num % log_period == 0:
+            print(f"iter {iter_num} | loss {trainer.last_loss:.4f} | iter_dt {trainer.iter_dt * 1000:.2f}ms")
+
         # report, save model?
-        if iter_num > trainer.get_start_iter_num():
+        if iter_num >= trainer.get_start_iter_num() + 1:
 
             model_evaluated = False
 
-            if iter_num % config.train.eval_period == 0: # evaluate loss 
+            if config.train.eval_period and iter_num % config.train.eval_period == 0: # evaluate loss 
 
                 train_loss, val_loss = estimate_loss(
                     train_dataset,
@@ -193,10 +209,10 @@ def train(config, model, trainer = None, optimizer_state_dict = None):
                     trainer.config.batch_size,
                     config.train.eval_iters)
 
-                if config.train.eval & 3 == 3:
+                if config.train.eval_type & 3 == 3:
                     loss = (train_loss + val_loss) / 2.
                 else:
-                    loss = val_loss if (config.train.eval & 2) and val_loss else train_loss
+                    loss = val_loss if (config.train.eval_type & 2) and val_loss else train_loss
 
                 val_loss = val_loss if val_loss is not None else float('inf')
 
@@ -225,8 +241,11 @@ def train(config, model, trainer = None, optimizer_state_dict = None):
 
                     last_saved_loss = loss
 
+                if config.train.debug & 1:
+                    cuda_max_memory_print()
 
-            if iter_num % config.train.sample_period == 0:
+
+            if config.train.sample_period and iter_num % config.train.sample_period == 0:
                 # evaluate both the train and test score
                 sample(config.sample, model, train_dataset)
 
@@ -240,20 +259,12 @@ def train(config, model, trainer = None, optimizer_state_dict = None):
         print('.', end='', flush=True)
 
 
-        cuda_max_memory_print()
 
 
 
     trainer.set_callback('on_batch_end', batch_end_callback)
 
-    cuda_max_memory_init()
-
     # run the optimization
     trainer.run()
-
-
-
-
-
 
 

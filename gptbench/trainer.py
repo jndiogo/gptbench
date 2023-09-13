@@ -22,8 +22,6 @@ class Trainer:
         c.batch_size = 32
 
         c.max_iters = None
-        c.start_iter_num = 0
-        c.start_loss = float("inf")
 
         c.grad_norm_clip = 1.0
 
@@ -44,20 +42,18 @@ class Trainer:
         return ["batch_size", "max_iters", "opti", "learning_rate", "adamw_betas", "adamw_weight_decay", "grad_norm_clip"]
 
 
-    def __init__(self, config, model, dataset, 
+    def __init__(self, trainer_config, model, dataset, 
                  start_iter_num = 0,
                  optimizer = None):
-        self.config = config
+        self.config = trainer_config
 
         self.model = model
         self.train_dataset = dataset.train
         self.callbacks = defaultdict(list)
         self.optimizer = optimizer
 
-        self.start_iter_num = start_iter_num
+        self.iter_num = self.start_iter_num = start_iter_num
 
-        # variables that will be assigned to trainer class later for logging and etc
-        self.iter_num = start_iter_num
         self.iter_time = 0.0
         self.iter_dt = 0.0
 
@@ -86,6 +82,10 @@ class Trainer:
     def get_start_iter_num(self):
         return self.start_iter_num
 
+    def get_local_iter_num(self):
+        """ local means since start_iter_num """
+        return self.iter_num - self.start_iter_num
+
     def run(self):
         model, config = self.model, self.config
 
@@ -104,8 +104,9 @@ class Trainer:
 
         model.train()
 
-        self.iter_time = time.time()
         data_iter = iter(train_loader)
+        self.last_loss = float('inf')
+        self.iter_time = time.time()
         
         while True:
 
@@ -129,6 +130,8 @@ class Trainer:
             torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_norm_clip)
 
             self.optimizer.step()
+
+            self.last_loss = loss.item()
 
             self.trigger_callbacks('on_batch_end')
             
