@@ -17,7 +17,7 @@ class Trainer:
         c = CfgNode()
 
         # dataloader parameters
-        c.num_workers = 4
+        c.n_workers = 4
 
         c.batch_size = 32
 
@@ -42,13 +42,13 @@ class Trainer:
         return ["batch_size", "max_iters", "opti", "learning_rate", "adamw_betas", "adamw_weight_decay", "grad_norm_clip"]
 
 
-    def __init__(self, trainer_config, model, dataset, 
+    def __init__(self, trainer_config, train_dataset, model, 
                  start_iter_num = 0,
                  optimizer = None):
         self.config = trainer_config
 
         self.model = model
-        self.train_dataset = dataset.train
+        self.train_dataset = train_dataset
         self.callbacks = defaultdict(list)
         self.optimizer = optimizer
 
@@ -99,7 +99,7 @@ class Trainer:
             shuffle=False,
             pin_memory=True,
             batch_size=config.batch_size,
-            num_workers=config.num_workers,
+            num_workers=config.n_workers,
         )
 
         model.train()

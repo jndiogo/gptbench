@@ -21,7 +21,7 @@ def set_seed(seed):
 
 
 
-def last_config_save(config):
+def save_last_config(config):
 
     d = config.to_dict(False)
 

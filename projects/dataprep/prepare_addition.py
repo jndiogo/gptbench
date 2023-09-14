@@ -17,12 +17,17 @@ if __name__ == '__main__':
     parser.add_argument('--times', '-t', type=int, default=1, help="how many times to generate all the entries")
     parser.add_argument('--shuffle', '-s', action='store_true', help="order shuffle")
     parser.add_argument('--gpt2', '-g', action='store_true', help="encode as gpt2 tokens")
+    parser.add_argument('--sep', '-p', type=str, default='<|endoftext|>', help="separator")
+    parser.add_argument('--reverse', '-r', action='store_true', help="reverse: a+b=c and c=a+b")
+
     args = parser.parse_args()
 
     path = args.filename
     dim = args.dim
 
-    sep = '<|endoftext|>'
+    sep = args.sep
+    sep=sep.replace('\\n', '\n')
+    sep=sep.replace('\\t', '\t')
 
     out = []
 
@@ -31,6 +36,9 @@ if __name__ == '__main__':
             for b in range(10 ** dim):
                 c = a+b
                 out.append( f"{a}+{b}={c}{sep}" )
+                if args.reverse:
+                    out.append( f"{c}={a}+{b}{sep}" )
+
 
     if args.shuffle:
         random.shuffle(out)

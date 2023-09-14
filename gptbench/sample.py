@@ -11,7 +11,7 @@ from torch.utils.data.dataloader import DataLoader
 from gptbench.model import GPT
 from gptbench.trainer import Trainer
 from gptbench.dataset import GPT2TokensDataset, DatasetBase
-from gptbench.utils import CfgNode, set_seed, last_config_save, die, print_sepline
+from gptbench.utils import CfgNode, print_sepline, set_seed
 
 
 
@@ -19,20 +19,50 @@ from gptbench.utils import CfgNode, set_seed, last_config_save, die, print_sepli
 
 # -----------------------------------------------------------------------------
 def sample_get_default_config():
-    
+
     # sample.*
     c = CfgNode()
 
     c.count = 1
-    c.len = 400
-    c.start = ' '
+    c.len = 100
+    c.start = None # None: use random vocabulary item on each sampling. Or str with starting text
     c.pertoken = 1 # display each token immediately
     c.eotstop = 0 # 0 don't stop, -1 stop before, 1 stop after (and display it)
-    c.top = 40 # 0..1: top_p, > 1: top_k
+    c.top = 0 # top_k/top_p  0: off,  ]0..1]: top_p,  [-1..0[: top_k(vocab_size * -top),  > 1: top_k(n)
     c.temp = 1. # temperature
-    c.multiline = 0 # input multiple lines until a Ctrl+D or Ctrl+Z (in Windows)
+    c.multiline = 0 # prompt mode: input multiple lines until a Ctrl+D or Ctrl+Z (in Windows)
 
     return c
+
+def sample_checkpoint_config_keys():
+    return ["count", "len", "start", "pertoken", "eotstop", "top", "temp", "multiline"]
+
+
+def sample_config_resolve(config, train_dataset):
+    """ config is global_config """
+
+    # check sample.start
+    if config.sample.start is not None:
+        if not train_dataset.is_text_valid(config.sample.start):
+            print(f"Config sample.start is not valid for dataset's vocabulary. Set to None (random)")
+            config.sample.start = None # random vocab item on each sampling
+
+    if config.sample.top > config.model.vocab_size:
+        print(f'Config sample.top only up to vocab_size: {config.model.vocab_size}')
+        config.sample.top = config.model.vocab_size
+
+
+
+
+def sample_get_valid_start(start, dataset, warn):
+
+    if start is None or not dataset.is_text_valid(start):
+        new_start = dataset.get_random_vocab_item()
+        if start is not None and warn:
+            print(f"Text '{start}' includes tokens/chars not available in the dataset. Using random '{new_start}' instead")
+        start = new_start
+
+    return start
 
 
 
@@ -45,7 +75,8 @@ def sample(sample_config, model, train_dataset, stop_asap=None):
 
     model.eval()
 
-    ix = train_dataset.encode(sample_config.start)    
+    start = sample_get_valid_start(sample_config.start, train_dataset, True)
+    ix = train_dataset.encode(start)
     x = torch.tensor(ix, dtype=torch.long).to(model.device)
 
     if sample_config.pertoken:
@@ -72,7 +103,7 @@ def sample(sample_config, model, train_dataset, stop_asap=None):
 
         for _ in range(sample_config.count):
             print_sepline()
-            print(sample_config.start, sep='', end='')
+            print(start, sep='', end='')
 
             model.generate(x, sample_config.len, temperature=sample_config.temp, do_sample=True, top=sample_config.top, 
                            token_callback = emit if sample_config.pertoken else None,
@@ -137,9 +168,7 @@ def prompt(config, model, train_dataset):
     ]
 
 
-    sample_config = config.sample
-
-    sample_config = copy.copy(sample_config)
+    sample_config = copy.copy(config.sample)
     sample_config.pertoken = 1
 
 
@@ -220,7 +249,7 @@ def prompt(config, model, train_dataset):
                 break
         else:
             p = p.replace("\\n", "\n")
-            sample_config.start=p
+            sample_config.start = p
 
             stop_asap = [False]
             signal.signal(signal.SIGINT, signal_handler)

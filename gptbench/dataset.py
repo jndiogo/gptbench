@@ -2,7 +2,7 @@
 Dataset classes derived from torch.utils.data.Dataset
 """
 
-import os, sys, copy, array
+import os, sys, copy, array, random, math, pdb
 
 import torch
 from torch.utils.data import Dataset
@@ -11,6 +11,7 @@ from torch.utils.data.dataloader import DataLoader
 import tiktoken
 
 from gptbench.utils import CfgNode, is_utf8
+
 
 
 class DatasetBase(Dataset):
@@ -32,28 +33,7 @@ class DatasetBase(Dataset):
         return ["path", "train_split"]
 
 
-    @staticmethod
-    def create_train_val_datasets(block_size, cls, train_split, data=None, data_path=None):
-        """ returns train_dataset, val_dataset - val dataset can be None if train_split=1. """
 
-        assert train_split is not None and train_split > 0. and train_split <= 1., "0 < train_split <= 1"
-
-        data = cls.load_data(block_size, data=data, data_path=data_path, verbose=True)
-
-        # deal with dummy dataset: return copies of data
-        if data is None and data_path is None:
-            return data, copy.copy(data) if train_split < 1. else None
-
-        split_index = int(len(data) * train_split)
-
-        train = cls(block_size, data=data[:split_index])
-
-        if split_index < len(data):
-            val = cls(block_size, data=data[split_index:])
-        else:
-            val = None
-
-        return train, val
 
 
 
@@ -73,7 +53,28 @@ class GPT2TokensDataset(DatasetBase):
     """
 
     @staticmethod
-    def load_data(block_size, data=None, data_path=None, verbose=False):
+    def create_train_val_datasets(block_size, train_split, data=None, data_path=None, repeat_if_needed=False):
+        """ returns train_dataset, val_dataset - val dataset can be None if train_split=1. """
+
+        assert train_split is not None and train_split > 0. and train_split <= 1., "0 < train_split <= 1"
+
+        data = GPT2TokensDataset.load_data(data=data, data_path=data_path, verbose=True)
+
+        split_index = int(len(data) * train_split)
+
+        train = GPT2TokensDataset(block_size, data=data[:split_index], repeat_if_needed=repeat_if_needed)
+
+        if split_index < len(data):
+            val = GPT2TokensDataset(block_size, data=data[split_index:], repeat_if_needed=repeat_if_needed)
+        else:
+            val = None
+
+        return train, val
+
+
+
+    @staticmethod
+    def load_data(data=None, data_path=None, verbose=False):
 
         enc = GPT2_ENC # tiktoken.get_encoding("gpt2")
 
@@ -84,7 +85,7 @@ class GPT2TokensDataset(DatasetBase):
         if data is None: # dummy dataset with size 1 and first token repeated
             if verbose:
                 print("Dataset: dummy 0 tokens")
-            data = [0] * (block_size+1)
+            data = [0]
 
         elif is_utf8(data): # tokenize
             if verbose:
@@ -102,12 +103,20 @@ class GPT2TokensDataset(DatasetBase):
         return data
 
 
-    def __init__(self, block_size, data=None, data_path=None):
-        """ data is a np.array(dtype=np.uint16) 
-        if both data and data_path are None, a dummy dataset is created with len=1 """
 
-        self.data = GPT2TokensDataset.load_data(block_size, data=data, data_path=data_path)
+    def __init__(self, block_size, data=None, data_path=None, repeat_if_needed=False):
+        """ data is a np.array(dtype=np.uint16) 
+        if both data and data_path are None, a dummy dataset with token id=0 is created
+        repeat_if_needed: if data size is less than block_size+1, repeat existing data as many times as needed (complete repeats only)
+        """
+
+        self.data = GPT2TokensDataset.load_data(data=data, data_path=data_path)
         # self.data is now encoded as uint16 tokens
+
+        if len(self.data) < block_size+1 and repeat_if_needed:
+            times = int(math.ceil((block_size+1) / len(self.data)))
+            print(f"Expanding initial dataset size of {len(self.data)} (less than block_size+1) by {times} times to size of {times*len(self.data)}")
+            self.data = self.data * times
 
         assert len(self.data) > block_size, f"data length ({len(self.data)}) must be greater than block_size({block_size})"
 
@@ -127,12 +136,27 @@ class GPT2TokensDataset(DatasetBase):
     def get_block_size(self):
         return self.block_size
 
+    def __len__(self):
+        return self.data_len
+
+    def is_text_valid(self, text):
+        try:
+            enc = GPT2_ENC # tiktoken.get_encoding("gpt2")
+            enc.encode(text, allowed_special={"<|endoftext|>"})
+            return True
+        except ValueError:
+            return False
+
+    def get_random_vocab_item(self):
+        index = random.randrange(self.get_vocab_size())
+        return self.decode([index])
+
+
     def get_eot_token(self):
         enc = GPT2_ENC # tiktoken.get_encoding("gpt2")
         return enc.eot_token
 
-    def __len__(self):
-        return self.data_len
+
 
     def encode(self, text): # text can be a string to be encoded or an int array already encoded
         if isinstance(text, str):
@@ -189,31 +213,90 @@ class GPT2TokensDataset(DatasetBase):
 
 
 
-class CharDataset(Dataset):
+class CharDataset(DatasetBase):
     """
-    Emits sequences of block_size characters randomly sampled from a dataset
+    UTF-8 character dataset. index <=> full utf-8 character
     """
 
-    def __init__(self, block_size, data=None, data_path=None):
 
-        assert data is not None or data_path is not None
+    @staticmethod
+    def create_train_val_datasets(block_size, train_split, data=None, data_path=None, repeat_if_needed=False):
+        """ returns train_dataset, val_dataset - val dataset can be None if train_split=1. """
 
-        if data_path is not None and data_path != '':
-            with open(data_path, 'r', encoding='utf-8') as f:
+        assert train_split is not None and train_split > 0. and train_split <= 1., "0 < train_split <= 1"
+
+        data = CharDataset.load_data(data=data, data_path=data_path, verbose=True)
+
+        split_index = int(len(data) * train_split)
+
+        train = CharDataset(block_size, data=data[:split_index], repeat_if_needed=repeat_if_needed)
+
+        if split_index < len(data):
+            vocab_chars = train.get_vocab_chars()            
+            val = CharDataset(block_size, data=data[split_index:], repeat_if_needed=repeat_if_needed,
+                              vocab_chars=vocab_chars)
+        else:
+            val = None
+
+        return train, val
+
+
+
+    @staticmethod
+    def load_data(data=None, data_path=None, verbose=False):
+
+        assert (data is not None) ^ (data_path is not None), "only one of data and data_path must be given - does not support dummy data"
+
+        if data_path is not None:
+            with open(data_path, 'r', newline=None) as f: # newlines converted to \n
                 data = f.read()
 
-        chars = sorted(list(set(data)))
+        if data is None: # dummy dataset with size 1 and first token repeated
+            assert False, "does not support dummy dataset"
+
+        return data
+
+
+
+    def __init__(self, block_size, data=None, data_path=None, repeat_if_needed=False, vocab_chars=None):
+
+        """ if vocab_chars is passed, it will be used instead of data's """
+
+        assert (data is not None) ^ (data_path is not None), "only one of data and data_path must be given - does not support dummy data"
+
+
+        data = CharDataset.load_data(data=data, data_path=data_path)
+        # self.data is now encoded as uint16 tokens
+
+        if len(data) < block_size+1 and repeat_if_needed:
+            times = int(math.ceil((block_size+1) / len(data)))
+            print(f"Expanding initial dataset size of {len(data)} (less than block_size+1) by {times} times to size of {times*len(data)}")
+            data = data * times
+
+        assert len(data) > block_size, f"data length ({len(data)}) must be greater than block_size({block_size})"
+
+
+        if vocab_chars is not None:            
+            chars = vocab_chars
+        else:
+            chars = list(set(data))
+
+        chars = sorted(chars)
+
         data_size, vocab_size = len(data), len(chars)
 
         self.stoi = { ch:i for i,ch in enumerate(chars) }
         self.itos = { i:ch for i,ch in enumerate(chars) }
-        self.block_size = block_size
         self.vocab_size = vocab_size
 
-
+        self.block_size = block_size
 
         self.data = data
         self.data_len = data_size - self.block_size
+
+
+    def get_vocab_chars(self):
+        return list(self.stoi.keys())
 
     def get_vocab_size(self):
         return self.vocab_size
@@ -221,20 +304,30 @@ class CharDataset(Dataset):
     def get_block_size(self):
         return self.block_size
 
+    def __len__(self):
+        return self.data_len
+
+
+    def is_text_valid(self, text):
+        return all([t in self.stoi for t in text])
+
+    def get_random_vocab_item(self):
+        index = random.randrange(self.get_vocab_size())
+        return self.itos[index]
+
     def get_eot_token(self):
         return None
 
-    def __len__(self):
-        return self.data_len
 
     def encode(self, text):
         return [self.stoi[id] for id in text]
 
-    def decode(self, ids):
+    def decode(self, ids):        
         return ''.join([self.itos[int(i)] for i in ids])
 
 
     def bufd_decode(self, ids):
+        """ chars are always utf-8 complete, so just use normal decode """
         return self.decode(ids)
 
     def bufd_flush(self):
