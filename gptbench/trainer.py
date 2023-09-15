@@ -39,7 +39,7 @@ class Trainer:
 
     @staticmethod
     def checkpoint_config_keys():
-        return ["batch_size", "max_iters", "opti", "learning_rate", "adamw_betas", "adamw_weight_decay", "grad_norm_clip"]
+        return ['batch_size', 'max_iters', 'opti', 'learning_rate', 'adamw_betas', 'adamw_weight_decay', 'grad_norm_clip']
 
 
     def __init__(self, trainer_config, train_dataset, model, 

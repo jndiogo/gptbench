@@ -15,11 +15,12 @@ if __name__ == '__main__':
     parser.add_argument('filename', type=str, help="output filename")
     parser.add_argument('dim', type=int, help="number dimensions: 1=0..9, 2=0..99, etc")
     parser.add_argument('--times', '-t', type=int, default=1, help="how many times to generate all the entries")
-    parser.add_argument('--shuffle', '-s', action='store_true', help="order shuffle")
+    parser.add_argument('--shuffle', '-u', action='store_true', help="order shuffle")
     parser.add_argument('--gpt2', '-g', action='store_true', help="encode as gpt2 tokens")
     parser.add_argument('--sep', '-p', type=str, default='<|endoftext|>', help="separator")
-    parser.add_argument('--reverse', '-r', action='store_true', help="reverse: a+b=c and c=a+b")
-
+    parser.add_argument('--features', '-f', type=str, default='', help="'reverse': a+b=c and c=a+b, 'commutative': a+b=b+a")
+    parser.add_argument('--split', '-s', type=float, default=1., help="split name.ext into name.train.ext and name.val.ext at this ratio of total entries")
+    
     args = parser.parse_args()
 
     path = args.filename
@@ -29,32 +30,76 @@ if __name__ == '__main__':
     sep=sep.replace('\\n', '\n')
     sep=sep.replace('\\t', '\t')
 
-    out = []
+    mult = 0
+    if 'reverse' in args.features:
+        mult+=1
+    if 'commutative' in args.features:
+        mult+=1
+
+    split_index = int(args.split * ( (10 ** (dim*2)) * mult) )
+
+    train = []
+    val = []
 
     for _ in range(args.times):
+        index = 0 
         for a in range(10 ** dim):
             for b in range(10 ** dim):
+                dest = train if index < split_index else val
+
                 c = a+b
-                out.append( f"{a}+{b}={c}{sep}" )
-                if args.reverse:
-                    out.append( f"{c}={a}+{b}{sep}" )
+
+                dest.append( f"{a}+{b}={c}{sep}" )
+
+                if 'reverse' in args.features:
+                    dest.append( f"{c}={a}+{b}{sep}" )
+
+                if 'commutative' in args.features:
+                    dest.append( f"{a}+{b}={b}+{a}{sep}" )
+
+                index += mult
 
 
     if args.shuffle:
-        random.shuffle(out)
+        random.shuffle(train)
+        random.shuffle(val)
 
-    text = ''.join(out)
 
-    if args.gpt2:
-        enc = tiktoken.get_encoding("gpt2")
-        ids = enc.encode(text, allowed_special={"<|endoftext|>"})
-        #ids.append(enc.eot_token) # '<|endoftext|>'
+    def save_data(path, text):
 
-        print(f"text={len(text)} -> tokens={len(ids)} = {len(ids)/len(text)*100:.1f}%, num_vocab={enc.n_vocab}")
+        if not len(text):
+            return
 
-        with open(path, 'wb') as f:
-            np.array(ids, dtype=np.uint16).tofile(f)
+        if args.gpt2:
+            enc = tiktoken.get_encoding("gpt2")
+            ids = enc.encode(text, allowed_special={"<|endoftext|>"})
+            #ids.append(enc.eot_token) # '<|endoftext|>'
 
-    else:
-        with open(path, 'w', encoding='utf-8', newline='\n') as f:
-            f.write(text)
+            print(f"{os.path.basename(path)}: text={len(text)} -> tokens={len(ids)} = {len(ids)/len(text)*100:.1f}%, num_vocab={enc.n_vocab}")
+
+            with open(path, 'wb') as f:
+                np.array(ids, dtype=np.uint16).tofile(f)
+
+        else:
+            print(f"{os.path.basename(path)}: text={len(text)}")
+
+            with open(path, 'w', encoding='utf-8', newline='\n') as f:
+                f.write(text)
+
+
+
+    train_text = ''.join(train)
+    val_text = ''.join(val)
+
+
+    if args.split != 1.:
+        rest,ext = os.path.splitext(path)
+        train_path = rest + ".train" + ext
+        val_path = rest + ".val" + ext
+
+        save_data(train_path, train_text)
+        save_data(val_path, val_text)
+
+    else: # only train dataset
+        save_data(path, train_text)
+

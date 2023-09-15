@@ -47,7 +47,7 @@ class GPT(nn.Module):
 
     @staticmethod
     def checkpoint_config_keys():
-        return ["n_layer", "n_head", "n_embd", "vocab_size", "block_size", "dropout", "dtype"]
+        return ['n_layer', 'n_head', 'n_embd', 'vocab_size', 'block_size', 'dropout', 'dtype']
 
 
     @classmethod
@@ -277,7 +277,7 @@ class GPT(nn.Module):
         top: 0: no top_k nor top_p
           ]0..1[: top_p(n)
           [-1..0[: top_k(vocab_size * -top)
-          >1: top_k(top)
+          >=1: top_k(int(top))
 
         stop_asap=[False] - when set to True, must break and return
 
@@ -287,7 +287,7 @@ class GPT(nn.Module):
 
         assert len(idx), 'At least a single sample is needed to generate'
 
-        if top < 0. and top >= -1.:
+        if top >= -1. and top < 0.:
             top = max(1, int(self.vocab_size * -top))
 
         for _ in range(max_new_tokens):

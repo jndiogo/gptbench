@@ -7,10 +7,11 @@ import os, sys, copy, signal, json
 import torch
 
 from gptbench.sample import sample, sample_checkpoint_config_keys
+
 from gptbench.model import GPT
-from gptbench.dataset import GPT2TokensDataset, DatasetBase
-from gptbench.trainer import Trainer
 from gptbench.utils import CfgNode, print_sepline, cuda_max_memory_init, cuda_max_memory_print
+from gptbench.dataset import dataset_checkpoint_config_keys
+from gptbench.trainer import Trainer
 
 
 
@@ -23,6 +24,8 @@ def train_get_default_config():
 
     c.start_iter_num = 0
     c.start_eval_loss = float('inf')
+    c.start_train_loss = float('inf')
+    c.start_val_loss = float('inf')
 
     c.log_period = -0.1 # simple forward pass loss log. Negative numbers mean max(1, int(eval_period * -log_period))
 
@@ -33,13 +36,13 @@ def train_get_default_config():
 
     c.sample_period = 1000 # when to sample. 0 for never
 
-    c.debug = 0 # 0: none, 1: log cuda peak used memory on each evaluation
+    c.debug = 0 # 0: none, 1: log cuda peak used memory on each evaluation, 2: print '.' per batch
 
     return c
 
 
 def train_checkpoint_config_keys():
-    return ["eval_period", "eval_type", "eval_iters", "sample_period", "start_iter_num", "start_eval_loss"]
+    return ['start_iter_num', 'start_eval_loss', 'start_train_loss', 'start_val_loss', 'eval_period', 'eval_type', 'eval_iters', 'sample_period']
 
 
 
@@ -218,7 +221,7 @@ def train(config, model,
 
                 val_loss = val_loss if val_loss is not None else float('inf')
 
-                print(f"iter {iter_num} ({trainer.epoch_from_iter_num():.3f} epoch) | eval loss {loss:.4f} ({train_loss:.4f},{val_loss:.4f})")
+                print(f"iter {iter_num} ({trainer.epoch_from_iter_num():.3f} epoch) | eval loss {loss:.4f} ({train_loss:.4f}, {val_loss:.4f})")
 
                 model_evaluated = True
 
@@ -231,6 +234,8 @@ def train(config, model,
                     train_config = copy.copy(config.train)
                     train_config.start_iter_num = iter_num
                     train_config.start_eval_loss = loss
+                    train_config.start_train_loss = train_loss
+                    train_config.start_val_loss = val_loss
 
                     checkpoint_save(config._model_path_prefix, 
                                     model, trainer.optimizer,
@@ -239,7 +244,7 @@ def train(config, model,
                                     config.sample.to_dict(False, sample_checkpoint_config_keys()),
 
                                     config.model.to_dict(False, GPT.checkpoint_config_keys()), 
-                                    config.dataset.to_dict(False, DatasetBase.checkpoint_config_keys()),
+                                    config.dataset.to_dict(False, dataset_checkpoint_config_keys()),
                                     config.trainer.to_dict(False, Trainer.checkpoint_config_keys())
                                     )
 
@@ -260,7 +265,8 @@ def train(config, model,
                 model.train() # revert model to training mode
 
 
-        print('.', end='', flush=True)
+        if config.train.debug & 2:
+            print('.', end='', flush=True)
 
 
 

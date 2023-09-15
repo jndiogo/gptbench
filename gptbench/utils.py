@@ -7,12 +7,14 @@ import numpy as np
 
 # -----------------------------------------------------------------------------
 
-def set_seed(seed):
+def set_seed(seed, verbose=True):
     if seed == 0:
         random.seed()
         seed = random.randrange(2**32)
 
-    print(f"New random seed {seed}")
+    if verbose:
+        print(f"New random seed {seed}")
+
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -32,10 +34,32 @@ def save_last_config(config):
 
 
 
+def in_notebook():
+    """ https://stackoverflow.com/questions/15411967/how-can-i-check-if-code-is-executed-in-the-ipython-notebook """
+    try:
+        from IPython import get_ipython
+        if 'IPKernelApp' not in get_ipython().config:  # pragma: no cover
+            return False
+    except ImportError:
+        return False
+    except AttributeError:
+        return False
 
-def die(msg, exit_code=1):
-    print(msg)
-    sys.exit(exit_code)
+    return True
+
+
+def die(msg=None, exit_code=1):
+
+    if in_notebook():
+        ex = f'exit code: {exit_code}'
+        if msg is not None:
+            assert False, msg + ' - ' + ex
+        else:
+            assert False, ex
+    else:
+        if msg is not None:
+            print(msg)
+        sys.exit(exit_code)
 
 
 

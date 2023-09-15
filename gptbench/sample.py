@@ -10,7 +10,6 @@ from torch.utils.data.dataloader import DataLoader
 
 from gptbench.model import GPT
 from gptbench.trainer import Trainer
-from gptbench.dataset import GPT2TokensDataset, DatasetBase
 from gptbench.utils import CfgNode, print_sepline, set_seed
 
 
@@ -23,19 +22,25 @@ def sample_get_default_config():
     # sample.*
     c = CfgNode()
 
-    c.count = 1
-    c.len = 100
+    c.count = 1 # number of generations
+    c.len = 100 # token count
+    
     c.start = None # None: use random vocabulary item on each sampling. Or str with starting text
+    c.start_after = None
+    c.stop_before = None
+
     c.pertoken = 1 # display each token immediately
     c.eotstop = 0 # 0 don't stop, -1 stop before, 1 stop after (and display it)
-    c.top = 0 # top_k/top_p  0: off,  ]0..1]: top_p,  [-1..0[: top_k(vocab_size * -top),  > 1: top_k(n)
+
+    c.top = 0 # top_k/top_p  0: off,  ]0..1]: top_p,  [-1..0[: top_k(vocab_size * -top),  >=1: top_k(int(n))
     c.temp = 1. # temperature
+
     c.multiline = 0 # prompt mode: input multiple lines until a Ctrl+D or Ctrl+Z (in Windows)
 
     return c
 
 def sample_checkpoint_config_keys():
-    return ["count", "len", "start", "pertoken", "eotstop", "top", "temp", "multiline"]
+    return ['count', 'len', 'start', 'pertoken', 'eotstop', 'top', 'temp', 'multiline']
 
 
 def sample_config_resolve(config, train_dataset):
@@ -51,6 +56,9 @@ def sample_config_resolve(config, train_dataset):
         print(f'Config sample.top only up to vocab_size: {config.model.vocab_size}')
         config.sample.top = config.model.vocab_size
 
+    # force per-token emission if prompt mode
+    if config.mode == 'prompt':
+        config.sample.pertoken = 1        
 
 
 
@@ -101,8 +109,9 @@ def sample(sample_config, model, train_dataset, stop_asap=None):
 
         x = x.repeat([1, 1])
 
-        for _ in range(sample_config.count):
-            print_sepline()
+        for t in range(sample_config.count):
+            if t: print_sepline()
+
             print(start, sep='', end='')
 
             model.generate(x, sample_config.len, temperature=sample_config.temp, do_sample=True, top=sample_config.top, 
@@ -129,6 +138,8 @@ def sample(sample_config, model, train_dataset, stop_asap=None):
             return
 
         for ir in range(y.size(0)):
+            if ir: print_sepline()
+
             row = y[ir,:].tolist()
 
             if sample_config.eotstop:
@@ -138,7 +149,6 @@ def sample(sample_config, model, train_dataset, stop_asap=None):
 
             completion = train_dataset.decode(row)
 
-            print_sepline()
             print(completion)
 
 
@@ -185,6 +195,7 @@ def prompt(config, model, train_dataset):
     def print_help():
         print("Enter sampling start text or a command in the form -cmd or -cmd=val. Possible commands: ", ['-' + c for c in allowed_cmds], "\n Press Ctrl+C once to stop generation.")
 
+    first = True
     while True:
         p = ''
         if sample_config.multiline:
@@ -258,6 +269,5 @@ def prompt(config, model, train_dataset):
 
             signal.signal(signal.SIGINT, original_sigint)
 
-            print_sepline()
 
 

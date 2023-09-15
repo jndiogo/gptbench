@@ -13,27 +13,21 @@ import tiktoken
 from gptbench.utils import CfgNode, is_utf8
 
 
+def dataset_get_default_config():
+    c = CfgNode()
 
-class DatasetBase(Dataset):
+    c.class_name = None
+    c.train_path = None # default '' means dummy dataset with one sample, for sampling (for token encode/decode)
+    c.val_path_or_train_split = 0.9 # 0..1 float: train_split for validation dataset from train dataset, str: validation dataset path
 
-    @staticmethod
-    def get_default_config():
-        c = CfgNode()
+    return c
 
-        c.cls = None
-        c.path = None # default '' means dummy dataset with one sample, for sampling (for token encode/decode)
-        c.train = None
-        c.val = None
-        c.train_split = 0.9
-
-        return c
-
-    @staticmethod
-    def checkpoint_config_keys():
-        return ["path", "train_split"]
+def dataset_checkpoint_config_keys():
+    return ['class_name', 'train_path', 'val_path_or_train_split']
 
 
-
+def dataset_class_from_name(class_name):
+    return {'gpt2': GPT2TokensDataset, 'char': CharDataset}[class_name]
 
 
 
@@ -47,27 +41,36 @@ TypeError: cannot pickle 'builtins.CoreBPE' object
 GPT2_ENC = tiktoken.get_encoding("gpt2")
 
 
-class GPT2TokensDataset(DatasetBase):
+class GPT2TokensDataset(Dataset):
     """
     Emits sequences of block_size GPT2 tokens randomly sampled from a dataset
     """
 
     @staticmethod
-    def create_train_val_datasets(block_size, train_split, data=None, data_path=None, repeat_if_needed=False):
-        """ returns train_dataset, val_dataset - val dataset can be None if train_split=1. """
+    def load_train_val_datasets(train_path, val_path_or_train_split,
+                                block_size, 
+                                repeat_if_needed=False):
+        """ returns train_dataset, val_dataset - val dataset can be None """
 
-        assert train_split is not None and train_split > 0. and train_split <= 1., "0 < train_split <= 1"
+        data = GPT2TokensDataset.load_data(data_path=train_path, verbose=True)
 
-        data = GPT2TokensDataset.load_data(data=data, data_path=data_path, verbose=True)
+        if isinstance(val_path_or_train_split, str): # val from path
+            train = GPT2TokensDataset(block_size, data=data, repeat_if_needed=repeat_if_needed)
+            val = GPT2TokensDataset(block_size, data_path=val_path_or_train_split, repeat_if_needed=repeat_if_needed)
 
-        split_index = int(len(data) * train_split)
+        else: # split from train
+            assert isinstance(val_path_or_train_split, float), "val_path_or_train_split can be of str (path) or float (train_split) types"
 
-        train = GPT2TokensDataset(block_size, data=data[:split_index], repeat_if_needed=repeat_if_needed)
+            assert val_path_or_train_split > 0. and val_path_or_train_split <= 1., "0 < train split <= 1"
 
-        if split_index < len(data):
-            val = GPT2TokensDataset(block_size, data=data[split_index:], repeat_if_needed=repeat_if_needed)
-        else:
-            val = None
+            split_index = int(len(data) * val_path_or_train_split)
+
+            train = GPT2TokensDataset(block_size, data=data[:split_index], repeat_if_needed=repeat_if_needed)
+
+            if split_index < len(data):
+                val = GPT2TokensDataset(block_size, data=data[split_index:], repeat_if_needed=repeat_if_needed)
+            else:
+                val = None
 
         return train, val
 
@@ -213,30 +216,45 @@ class GPT2TokensDataset(DatasetBase):
 
 
 
-class CharDataset(DatasetBase):
+class CharDataset(Dataset):
     """
     UTF-8 character dataset. index <=> full utf-8 character
     """
 
 
     @staticmethod
-    def create_train_val_datasets(block_size, train_split, data=None, data_path=None, repeat_if_needed=False):
-        """ returns train_dataset, val_dataset - val dataset can be None if train_split=1. """
+    def load_train_val_datasets(train_path, val_path_or_train_split,
+                                block_size, 
+                                repeat_if_needed=False):
+        """ returns train_dataset, val_dataset - val dataset can be None """
 
-        assert train_split is not None and train_split > 0. and train_split <= 1., "0 < train_split <= 1"
+        data = CharDataset.load_data(data_path=train_path, verbose=True)
 
-        data = CharDataset.load_data(data=data, data_path=data_path, verbose=True)
+        if isinstance(val_path_or_train_split, str): # val from path
 
-        split_index = int(len(data) * train_split)
+            val_data = CharDataset.load_data(data_path=val_path_or_train_split, verbose=True)
 
-        train = CharDataset(block_size, data=data[:split_index], repeat_if_needed=repeat_if_needed)
+            # calc combined vocab
+            vocab_chars = CharDataset.calc_vocab_chars(data + val_data)
 
-        if split_index < len(data):
-            vocab_chars = train.get_vocab_chars()            
-            val = CharDataset(block_size, data=data[split_index:], repeat_if_needed=repeat_if_needed,
-                              vocab_chars=vocab_chars)
-        else:
-            val = None
+            train = CharDataset(block_size, data=data, repeat_if_needed=repeat_if_needed, vocab_chars=vocab_chars)
+            val = CharDataset(block_size, data=val_data, repeat_if_needed=repeat_if_needed, vocab_chars=vocab_chars)
+
+        else: # split from train
+            assert isinstance(val_path_or_train_split, float), "val_path_or_train_split can be of str (path) or float (train_split) types"
+
+            assert val_path_or_train_split > 0. and val_path_or_train_split <= 1., "0 < train split <= 1"
+
+            split_index = int(len(data) * val_path_or_train_split)
+
+            train = CharDataset(block_size, data=data[:split_index], repeat_if_needed=repeat_if_needed)
+
+            if split_index < len(data):
+                vocab_chars = train.get_vocab_chars()            
+                val = CharDataset(block_size, data=data[split_index:], repeat_if_needed=repeat_if_needed,
+                                  vocab_chars=vocab_chars)
+            else:
+                val = None
 
         return train, val
 
@@ -245,7 +263,7 @@ class CharDataset(DatasetBase):
     @staticmethod
     def load_data(data=None, data_path=None, verbose=False):
 
-        assert (data is not None) ^ (data_path is not None), "only one of data and data_path must be given - does not support dummy data"
+        assert (data is not None) ^ (data_path is not None), "Dataset does not support dummy data: one of data and data_path must be given"
 
         if data_path is not None:
             with open(data_path, 'r', newline=None) as f: # newlines converted to \n
@@ -256,6 +274,10 @@ class CharDataset(DatasetBase):
 
         return data
 
+
+    @staticmethod
+    def calc_vocab_chars(data):
+        return sorted( list(set(data)) )
 
 
     def __init__(self, block_size, data=None, data_path=None, repeat_if_needed=False, vocab_chars=None):
@@ -268,6 +290,16 @@ class CharDataset(DatasetBase):
         data = CharDataset.load_data(data=data, data_path=data_path)
         # self.data is now encoded as uint16 tokens
 
+        if vocab_chars is not None:            
+            chars = sorted( vocab_chars ) # sorted just in case
+        else:
+            chars = CharDataset.calc_vocab_chars(data)
+
+        self.vocab_size = len(chars)
+
+        self.stoi = { ch:i for i,ch in enumerate(chars) }
+        self.itos = { i:ch for i,ch in enumerate(chars) }
+
         if len(data) < block_size+1 and repeat_if_needed:
             times = int(math.ceil((block_size+1) / len(data)))
             print(f"Expanding initial dataset size of {len(data)} (less than block_size+1) by {times} times to size of {times*len(data)}")
@@ -275,24 +307,11 @@ class CharDataset(DatasetBase):
 
         assert len(data) > block_size, f"data length ({len(data)}) must be greater than block_size({block_size})"
 
-
-        if vocab_chars is not None:            
-            chars = vocab_chars
-        else:
-            chars = list(set(data))
-
-        chars = sorted(chars)
-
-        data_size, vocab_size = len(data), len(chars)
-
-        self.stoi = { ch:i for i,ch in enumerate(chars) }
-        self.itos = { i:ch for i,ch in enumerate(chars) }
-        self.vocab_size = vocab_size
+        self.data = data
+        self.data_len = len(data) - block_size
 
         self.block_size = block_size
 
-        self.data = data
-        self.data_len = data_size - self.block_size
 
 
     def get_vocab_chars(self):

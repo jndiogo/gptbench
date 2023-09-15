@@ -4,12 +4,12 @@
 
 import os, sys, copy, signal, json
 
-from gptbench.train import train, checkpoint_load, train_get_default_config, train_checkpoint_config_keys, train_config_resolve
-from gptbench.sample import sample, prompt, sample_get_default_config, sample_config_resolve, sample_checkpoint_config_keys
+from gptbench.train import train as _train, checkpoint_load, train_get_default_config, train_checkpoint_config_keys, train_config_resolve
+from gptbench.sample import sample as _sample, prompt as _prompt, sample_get_default_config, sample_config_resolve, sample_checkpoint_config_keys
 
 from gptbench.model import GPT
 from gptbench.trainer import Trainer
-from gptbench.dataset import DatasetBase
+from gptbench.dataset import dataset_get_default_config, dataset_checkpoint_config_keys, dataset_class_from_name
 
 from gptbench.utils import CfgNode, set_seed, save_last_config, die, print_sepline, cuda_max_memory_init, cuda_max_memory_print
 
@@ -58,10 +58,11 @@ def default_full_config():
 
     c = empty_config()
 
-    c.work_dir = './out'
-
     c.seed = 0 # 0 means random seed
 
+    c.work_dir = './out'
+
+    c.verbose = 2 # 2: display all initial info, 1: just display resolved config, 0: no intial info
 
     # train
     c.train = train_get_default_config()
@@ -77,7 +78,7 @@ def default_full_config():
     c.trainer = Trainer.get_default_config()
 
     # dataset
-    c.dataset = DatasetBase.get_default_config()
+    c.dataset = dataset_get_default_config()
 
 
     return c
@@ -93,7 +94,8 @@ def merge_config_from_sysargv(sys_argv, base_config = None):
     argv = sys_argv[1:]
 
     if len(argv) < 2: # at least mode, init
-        usage_exit()
+        usage()
+        die()
 
     if base_config is not None:
         config = base_config
@@ -103,16 +105,16 @@ def merge_config_from_sysargv(sys_argv, base_config = None):
     config.merge_from_args(argv, key_must_exist=False)
 
     if not (hasattr(config, 'mode') and hasattr(config, 'init')):
-        usage_exit()
+        usage()
+        die()
 
     return config
 
 
 
 # -----------------------------------------------------------------------------
-def usage_exit():
-    die('''
-Usage: run.py mode=train init=resume [name=model21] [config] ...
+def usage():
+    print('''Usage: run.py mode=train init=resume [name=model21] [config] ...
 
    mode=train|sample|prompt
    init=new|resume|gpt2*, gpt2* is one of gpt2, gpt2-medium, gpt2-large, gpt2-xl
@@ -125,10 +127,15 @@ Usage: run.py mode=train init=resume [name=model21] [config] ...
 
     -model.*=model config options
     -trainer.*=trainer config options
-    -dataset.path=path to training dataset, default is "" for dummy dataset
+    -dataset.train_path=path to training dataset, None for dummy dataset
 
 Default config:
 ''' + str(default_full_config()) )
+
+
+def printv(str, min_verbose, verbose):
+    if verbose >= min_verbose:
+        print(str)
 
 
 
@@ -136,13 +143,87 @@ Default config:
 def load_datasets(dataset_config, block_size, to_train):
 
     if not to_train:
-        dataset_config.train_split = 1. # when sampling force train split to dummy 1, to avoid errors creating small val 
+        dataset_config.val_path_or_train_split = 1. # when sampling force train split to dummy 1, to avoid errors creating small val 
+    try:
+        cls = dataset_class_from_name(dataset_config.class_name)
+    except KeyError:
+        die("Unknown config value dataset.class_name")
 
-    cls = dataset_config.cls
-    return cls.create_train_val_datasets(block_size,
-                                         dataset_config.train_split, 
-                                         data_path=dataset_config.path,
-                                         repeat_if_needed=True)
+    return cls.load_train_val_datasets(dataset_config.train_path,
+                                       dataset_config.val_path_or_train_split,
+                                       block_size,
+                                       repeat_if_needed=True)
+
+
+
+
+
+# -----------------------------------------------------------------------------
+def train(part_config, name=None, init=None, verbose=None):
+
+    part_config = copy.copy(part_config)
+
+    part_config.mode = 'train'
+
+    if name is not None:
+        part_config.name = name
+
+    if init is not None:
+        part_config.init = init
+    
+    if verbose is not None:
+        part_config.verbose = verbose
+
+    return run(part_config)
+
+
+def sample(part_config, name=None, init=None, verbose=None):
+
+    part_config = copy.copy(part_config)
+
+    part_config.mode = 'sample'    
+
+    if name is not None:
+        part_config.name = name
+
+    if init is not None:
+        part_config.init = init
+
+    if not hasattr(part_config, 'init'):
+        part_config.init = 'resume'
+
+    assert part_config.init != 'new', "To sample, config.init must be set to 'resume' or to any of the gpt2 models"
+
+    if not hasattr(part_config, 'verbose'):
+        part_config.verbose = verbose
+
+    if verbose is not None:
+        part_config.verbose = verbose
+
+    return run(part_config)
+
+
+def prompt(part_config, name=None, init=None, verbose=None):
+
+    part_config = copy.copy(part_config)
+
+    part_config.mode = 'prompt'
+
+    if name is not None:
+        part_config.name = name
+
+    if init is not None:
+        part_config.init = init
+
+    if not hasattr(part_config, 'init'):
+        part_config.init = 'resume'
+
+    assert part_config.init != 'new', "To prompt, config.init must be set to 'resume' or to any of the gpt2 models"
+
+    if verbose is not None:
+        part_config.verbose = verbose
+
+    return run(part_config)
 
 
 
@@ -181,19 +262,17 @@ def run(part_config):
         # force 0 dropout when sampling
         part_config.model.dropout=0.
 
-        # force per-token emission if prompt mode
-        if part_config.mode == 'prompt':
-            part_config.sample.token_emit = True
-
     else:
         die('Config -mode= must be one of: train, sample, prompt')
 
 
     config = default_full_config()
 
-    # resolve seed beforehand
+    # resolve beforehand
+    verbose = part_config.verbose if hasattr(part_config, 'verbose') else config.verbose
     seed = part_config.seed if hasattr(part_config, 'seed') else config.seed
-    set_seed(config.seed)
+
+    set_seed(config.seed, verbose >= 2)
 
 
     optimizer_state_dict = None
@@ -202,13 +281,13 @@ def run(part_config):
     if part_config.init == 'new' or part_config.init == 'resume':
 
         if part_config.init == 'new':
-            print(f"Initializing new model {part_config._model_path_prefix}")
+            printv(f"Initializing new model {part_config._model_path_prefix}", 2, verbose)
 
             model_state_dict = None
 
 
         else: # load checkpoint
-            print(f"Loading checkpoint from {part_config._model_path_prefix}")
+            printv(f"Loading checkpoint from {part_config._model_path_prefix}", 2, verbose)
 
             (model_state_dict, optimizer_state_dict, 
 
@@ -226,13 +305,13 @@ def run(part_config):
 
             config.model.merge_from_dict(model_config_dict, GPT.checkpoint_config_keys())
             config.trainer.merge_from_dict(trainer_config_dict, Trainer.checkpoint_config_keys())
-            config.dataset.merge_from_dict(dataset_config_dict, DatasetBase.checkpoint_config_keys())
+            config.dataset.merge_from_dict(dataset_config_dict, dataset_checkpoint_config_keys())
 
             # if resumed dataset file is no longer available: erase it - either part_config's or an empty dummy will be used
-            if not os.path.isfile(config.dataset.path):
-                config.dataset.path = None
+            #if not os.path.isfile(config.dataset.train_path):
+            #    config.dataset.train_path = None
 
-            print(f"Checkpoint: iter_num={config.train.start_iter_num}, eval loss={config.train.start_eval_loss}")
+            printv(f"Checkpoint: iter_num={config.train.start_iter_num}, eval loss={config.train.start_eval_loss}", 2, verbose)
 
 
         # merge part_config into config for the final resolved config
@@ -257,7 +336,7 @@ def run(part_config):
         if part_config.init not in ['gpt2', 'gpt2-medium', 'gpt2-large', 'gpt2-xl']:
             die('Config -init= must be one of: new, resume, gpt2, gpt2-medium, gpt2-large, gpt2-xl')
 
-        print(f"Initializing model from {part_config.init}")
+        printv(f"Initializing model from {part_config.init}", 2, verbose)
 
         # merge part_config into config for the final resolved config
         config.merge_from_config(part_config)
@@ -275,7 +354,7 @@ def run(part_config):
         die('Config -init= must be one of: new, resume, gpt2, gpt2-medium, gpt2-large, gpt2-xl')
 
 
-    print(f"Dataset: {config.dataset.path if config.dataset.path else 'dummy empty dataset'} vocab_size: {train_dataset.get_vocab_size()}")
+    printv(f"Dataset: {config.dataset.train_path if config.dataset.train_path else 'dummy empty dataset'} vocab_size: {train_dataset.get_vocab_size()}", 2, verbose)
 
    
     train_config_resolve(config, val_dataset)
@@ -287,26 +366,27 @@ def run(part_config):
 
 
     # log config which is now fully resolved
-    print("Model params: %.2fM" % (model.get_num_params()/1e6,))
-    print(f"Running on device: {model.device}, dtype: {model.dtype}")
+    printv("Model params: %.2fM" % (model.get_num_params()/1e6,), 2, verbose)
+    printv(f"Running on device: {model.device}, dtype: {model.dtype}", 2, verbose)
 
-    print_sepline()
-    print('Resolved config:')
-    print(config)
-    print_sepline()
+    if verbose >= 1:
+        print_sepline()
+        print('Resolved config:')
+        print(config)
+        print_sepline()
 
 
     if do_train: # training
-        print("Train mode")
-        train(config, model, 
+        printv("Train mode:", 2, verbose)
+        _train(config, model, 
               train_dataset, val_dataset,
               optimizer_state_dict=optimizer_state_dict)
 
     elif config.mode == 'prompt':
         print("Prompt mode: press Enter (single line mode), or Ctrl+D / Ctrl+Z (multiline mode) to submit starting text. Enter -help for available commands.")
-        prompt(config, model, train_dataset)
+        _prompt(config, model, train_dataset)
 
     else: # sampling
-        print("Sampling mode")
-        sample(config.sample, model, train_dataset)
+        printv("Sampling mode:", 2, verbose)
+        _sample(config.sample, model, train_dataset)
 
