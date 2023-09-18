@@ -6,275 +6,223 @@ import os, sys, copy, signal, json
 
 import torch
 
-from gptbench.sample import sample, sample_checkpoint_config_keys
 
-from gptbench.model import GPT
-from gptbench.utils import CfgNode, print_sepline, cuda_max_memory_init, cuda_max_memory_print
-from gptbench.dataset import dataset_checkpoint_config_keys
-from gptbench.trainer import Trainer
+from .sample import Sample, LogFlag
 
+from .model import GPT
+from .trainer import Trainer
 
+from .config import checkpoint_save, sample_checkpoint_config_keys, train_checkpoint_config_keys, dataset_checkpoint_config_keys
 
-
-# -----------------------------------------------------------------------------
-def train_get_default_config():
-
-    # train.*
-    c = CfgNode()
-
-    c.start_iter_num = 0
-    c.start_eval_loss = float('inf')
-    c.start_train_loss = float('inf')
-    c.start_val_loss = float('inf')
-
-    c.log_period = -0.1 # simple forward pass loss log. Negative numbers mean max(1, int(eval_period * -log_period))
-
-    c.eval_period = 100 # each n batches we eval and check if saving model. 0 for none
-    c.eval_type = 2 # how to estimate loss -> 1: on test data, 2: on val data (or test if no val dataset), 1|2=3: mean(test,val)
-    c.eval_iters = 100
-    c.eval_save_checkpt = 1 # 0=never, 1=on lower loss, 2=always
-
-    c.sample_period = 1000 # when to sample. 0 for never
-
-    c.debug = 0 # 0: none, 1: log cuda peak used memory on each evaluation, 2: print '.' per batch
-
-    return c
-
-
-def train_checkpoint_config_keys():
-    return ['start_iter_num', 'start_eval_loss', 'start_train_loss', 'start_val_loss', 'eval_period', 'eval_type', 'eval_iters', 'sample_period']
-
-
-
-def train_config_resolve(config, val_datase):
-    """ config is global_config """
-
-    if val_datase is None: # no validations dataset?
-        config.train.eval_type &= 1 # clear val bit
-    if config.train.eval_type & 3 == 0: # force at least train
-        config.train.eval_type = 1
-
-    assert (config.train.eval_type & 3) != 0, "config.train.eval_type must be set to 1, 2 or 1|2"
-
-    if config.train.log_period < 0:
-        config.train.log_period = max(1, int(config.train.eval_period * -config.train.log_period))
-    else:
-        config.train.log_period = config.train.log_period
+from .utils import print_sepline, cuda_max_memory_init, cuda_max_memory
 
 
 
 # -----------------------------------------------------------------------------
-CHECKPOINT_VERSION = 1
 
-def checkpoint_load(path_prefix, load_optimizer_state):
-    """ """
+class Train(Sample):
+    def __init__(self, name='model', work_dir='./out', log_mask=LogFlag.ALL):
+        super().__init__(name, work_dir, log_mask)
 
-    model_state_dict = torch.load(path_prefix + ".pt")
-    if load_optimizer_state:
-        optimizer_state_dict = torch.load(path_prefix + ".opti")
-    else:
-        optimizer_state_dict = None
+        self.trainer = None
+        self._can_train = True
 
-    with open(path_prefix + '.json', 'r', encoding='utf-8') as f:
-        js = f.read()
-    j = json.loads(js)
 
-    return (model_state_dict, optimizer_state_dict,
-            j['train'],
-            j['sample'],
 
-            j['model'],
-            j['dataset'],
-            j['trainer'] )
 
 
+    def train(self,
+              batch_size=None, over_trainer_config=None, 
+              over_train_config=None,
+              **kwargs):
 
-def checkpoint_save(path_prefix, 
-                    model, optimizer, 
+        """ kwargs: key value of config.train settings """
 
-                    train_config_dict,
-                    sample_config_dict,
 
-                    model_config_dict,
-                    dataset_config_dict,
-                    trainer_config_dict):
+        # trainer config
+        if batch_size is not None:
+            self.config.trainer.batch_size = batch_size
+        if over_trainer_config is not None:
+            self.config.trainer.merge_from_config(over_trainer_config)
 
-    # no CTRL+C interruptions while saving, please (malformed checkpoint files)
-    original_sigint = signal.getsignal(signal.SIGINT)
-    signal.signal(signal.SIGINT, signal.SIG_IGN)
+        # train config
+        if over_train_config is not None:
+            self.config.train.merge_from_config(over_train_config)
+        #override existing keys from kwargs
+        self.config.train.merge_from_dict(kwargs, existing_only=True)
 
 
-    torch.save(model.state_dict(), path_prefix + ".pt")
-    torch.save(optimizer.state_dict(), path_prefix + ".opti")
+        # resolve train config
+        if self.val_dataset is None: # no validations dataset?
+            self.config.train.eval_type &= 1 # clear val bit
+        if self.config.train.eval_type & 3 == 0: # force at least train
+            self.config.train.eval_type = 1
 
-    config_info = {'_version': CHECKPOINT_VERSION,
-                   'train': train_config_dict,
-                   'sample': sample_config_dict,
+        assert (self.config.train.eval_type & 3) != 0, "config.train.eval_type must be set to 1, 2 or 1|2"
 
-                   'model': model_config_dict,
-                   'dataset': dataset_config_dict,
-                   'trainer': trainer_config_dict
-                   }
+        if self.config.train.log_period < 0:
+            self.config.train.log_period = max(1, int(self.config.train.eval_period * -self.config.train.log_period))
+        else:
+            self.config.train.log_period = self.config.train.log_period
 
-    json_str = json.dumps(config_info, indent=4)
 
-    with open(path_prefix + '.json', 'w', encoding='utf-8') as f:
-        f.write(json_str)
+        train_config = self.config.train
 
 
-    # restore original handler
-    signal.signal(signal.SIGINT, original_sigint)
+        self._log(LogFlag.CUDA_MEMORY, cuda_max_memory_init())
 
 
+        if self.trainer is None:
+            # construct the trainer object
+            self.trainer = Trainer(self.config.trainer, self.train_dataset, self.model, start_iter_num=train_config.start_iter_num)
 
-# -----------------------------------------------------------------------------
-@torch.no_grad()
-def estimate_loss(train_dataset, val_dataset, model, batch_size, iters):
-    """ train_dataset or val_dataset can be None to skip its eval returns train_loss,val_loss any of which can be None"""
+        if self._resumed_optimizer_state_dict is not None:
+            self._log(LogFlag.INIT , "Resuming optimizer state")
+            self.trainer.set_optimizer_state_dict(self._resumed_optimizer_state_dict)
 
-    model.eval()
+            self._resumed_optimizer_state_dict = None # consummed!
 
-    out = []
 
-    for split in ['train', 'val']:
-        dataset=train_dataset if split == 'train' else val_dataset
+        self._log(LogFlag.INIT, f"Batches per epoch: {int(self.trainer.batches_for_epoch())}")
 
-        if dataset is None:
-            out.append(None)
-            continue
+        last_saved_loss = train_config.start_eval_loss
 
-        losses = torch.zeros(iters)
 
-        for k in range(iters):
 
-            ix = torch.randint(len(dataset), (batch_size,))
+        # iteration callback
+        def batch_end_callback(trainer):
+            nonlocal train_config, last_saved_loss
 
-            batches = [dataset[i] for i in ix] # [(x,y),(x,y),...]
+            iter_num = self.trainer.iter_num
 
-            x = torch.stack([x for x,_ in batches])
-            y = torch.stack([y for _,y in batches])
+            if train_config.log_period and iter_num % train_config.log_period == 0:
+                self._log(LogFlag.BATCH_LOSS, f"iter {iter_num} | loss {self.trainer.last_loss:.4f} | iter_dt {self.trainer.iter_dt * 1000:.2f}ms")
 
-            x, y = x.to(model.device), y.to(model.device)
+            # report, save model?
+            if iter_num >= self.trainer.get_start_iter_num() + 1:
 
-            _, loss = model(x,y)
+                if train_config.eval_period and iter_num % train_config.eval_period == 0: # evaluate loss 
 
-            losses[k] = loss.item()
+                    # evaluate both the train and validation score
+                    train_loss, val_loss = self.estimate_loss(
+                        self.train_dataset,
+                        self.val_dataset,
+                        self.config.trainer.batch_size,
+                        train_config.eval_iters)
 
-        out.append(losses.mean().item())
+                    if train_config.eval_type & 3 == 3:
+                        loss = (train_loss + val_loss) / 2.
+                    else:
+                        loss = val_loss if (train_config.eval_type & 2) and val_loss else train_loss
 
-    return out
+                    val_loss = val_loss if val_loss is not None else float('inf')
 
+                    self._log(LogFlag.EVAL_LOG, f"iter {iter_num} ({self.trainer.epoch_from_iter_num():.3f} epoch) | eval loss {loss:.4f} ({train_loss:.4f}, {val_loss:.4f})")
 
 
-# -----------------------------------------------------------------------------
-def train(config, model, 
-          train_dataset, val_dataset,
-          trainer=None, optimizer_state_dict=None):
-    """config is global config """
+                    if (train_config.eval_save_checkpt == 1 and loss < last_saved_loss) \
+                       or train_config.eval_save_checkpt == 2: # save a checkpoint
 
-    if config.train.debug & 1:
-        cuda_max_memory_init()
+                        self._log(LogFlag.EVAL_LOG, f"==> Saving model at loss={loss:.4f} iter={iter_num}")
 
+                        self.save(iter_num, loss, train_loss, val_loss)
 
-    if trainer is None:
-        # construct the trainer object
-        trainer = Trainer(config.trainer, train_dataset, model, start_iter_num=config.train.start_iter_num)
+                        last_saved_loss = loss
 
 
-    if optimizer_state_dict is not None:
-        print("Resuming optimizer state")
-        trainer.set_optimizer_state_dict(optimizer_state_dict)
+                    self._log(LogFlag.CUDA_MEMORY, cuda_max_memory())
 
-    print(f"Batches per epoch: {int(trainer.batches_for_epoch())}")
 
-    last_saved_loss = config.train.start_eval_loss
+                if train_config.sample_period and iter_num % train_config.sample_period == 0:
+                    self.sample()
+                    model_evaluated = True
 
 
+            self._log(LogFlag.BATCH_LOSS, '.', end='', flush=True)
 
-    # iteration callback
-    def batch_end_callback(trainer):
-        nonlocal last_saved_loss
 
-        iter_num = trainer.iter_num
 
-        if config.train.log_period and iter_num % config.train.log_period == 0:
-            print(f"iter {iter_num} | loss {trainer.last_loss:.4f} | iter_dt {trainer.iter_dt * 1000:.2f}ms")
+        self.trainer.set_callback('on_batch_end', batch_end_callback)
 
-        # report, save model?
-        if iter_num >= trainer.get_start_iter_num() + 1:
+        # run the optimization
+        self.trainer.run()
 
-            model_evaluated = False
 
-            if config.train.eval_period and iter_num % config.train.eval_period == 0: # evaluate loss 
+        # update config
+        train_config.start_iter_num = iter_num
+        train_config.start_eval_loss = loss
+        train_config.start_train_loss = train_loss
+        train_config.start_val_loss = val_loss
 
-                train_loss, val_loss = estimate_loss(
-                    train_dataset,
-                    val_dataset,
-                    model,
-                    trainer.config.batch_size,
-                    config.train.eval_iters)
 
-                if config.train.eval_type & 3 == 3:
-                    loss = (train_loss + val_loss) / 2.
-                else:
-                    loss = val_loss if (config.train.eval_type & 2) and val_loss else train_loss
 
-                val_loss = val_loss if val_loss is not None else float('inf')
 
-                print(f"iter {iter_num} ({trainer.epoch_from_iter_num():.3f} epoch) | eval loss {loss:.4f} ({train_loss:.4f}, {val_loss:.4f})")
+    def save(self, start_iter_num, 
+             start_eval_loss, start_train_loss, stat_val_loss):
 
-                model_evaluated = True
+        self._ensure_work_dir()
 
+        dup_train_config = copy.copy(self.config.train)
+        dup_train_config.start_iter_num = start_iter_num
+        dup_train_config.start_eval_loss = start_loss
+        dup_train_config.start_train_loss = start_train_loss
+        dup_train_config.start_val_loss = start_val_loss
 
-                if (config.train.eval_save_checkpt == 1 and loss < last_saved_loss) \
-                   or config.train.eval_save_checkpt == 2: # save a checkpoint
+        checkpoint_save(self._model_path_prefix, 
+                        self.model, self.trainer.optimizer,
 
-                    print(f"==> Saving model at loss={loss:.4f} iter={iter_num}")
+                        dup_train_config.to_dict(False, train_checkpoint_config_keys()),
+                        self.config.sample.to_dict(False, sample_checkpoint_config_keys()),
 
-                    train_config = copy.copy(config.train)
-                    train_config.start_iter_num = iter_num
-                    train_config.start_eval_loss = loss
-                    train_config.start_train_loss = train_loss
-                    train_config.start_val_loss = val_loss
+                        self.config.model.to_dict(False, GPT.checkpoint_config_keys()), 
+                        self.config.dataset.to_dict(False, dataset_checkpoint_config_keys()),
+                        self.config.trainer.to_dict(False, Trainer.checkpoint_config_keys())
+                        )
 
-                    checkpoint_save(config._model_path_prefix, 
-                                    model, trainer.optimizer,
 
-                                    train_config.to_dict(False, train_checkpoint_config_keys()),
-                                    config.sample.to_dict(False, sample_checkpoint_config_keys()),
 
-                                    config.model.to_dict(False, GPT.checkpoint_config_keys()), 
-                                    config.dataset.to_dict(False, dataset_checkpoint_config_keys()),
-                                    config.trainer.to_dict(False, Trainer.checkpoint_config_keys())
-                                    )
 
-                    last_saved_loss = loss
 
-                if config.train.debug & 1:
-                    cuda_max_memory_print()
 
 
-            if config.train.sample_period and iter_num % config.train.sample_period == 0:
-                # evaluate both the train and test score
-                sample(config.sample, model, train_dataset)
 
-                model_evaluated = True
 
-            
-            if model_evaluated:
-                model.train() # revert model to training mode
+   # -----------------------------------------------------------------------------
+    @torch.no_grad()
+    def estimate_loss(self, train_dataset, val_dataset, batch_size, iters):
+        """ train_dataset or val_dataset can be None to skip its eval returns train_loss,val_loss any of which can be None"""
 
+        self.model.eval()
 
-        if config.train.debug & 2:
-            print('.', end='', flush=True)
+        out = []
 
+        for split in ['train', 'val']:
+            dataset=train_dataset if split == 'train' else val_dataset
 
+            if dataset is None:
+                out.append(None)
+                continue
 
+            losses = torch.zeros(iters)
 
+            for k in range(iters):
 
-    trainer.set_callback('on_batch_end', batch_end_callback)
+                ix = torch.randint(len(dataset), (batch_size,))
 
-    # run the optimization
-    trainer.run()
+                batches = [dataset[i] for i in ix] # [(x,y),(x,y),...]
+
+                x = torch.stack([x for x,_ in batches])
+                y = torch.stack([y for _,y in batches])
+
+                x, y = x.to(self.model.device), y.to(self.model.device)
+
+                _, loss = self.model(x,y)
+
+                losses[k] = loss.item()
+
+            out.append(losses.mean().item())
+
+        return out
+
 
 

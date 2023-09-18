@@ -22,18 +22,6 @@ def set_seed(seed, verbose=True):
 
 
 
-
-def save_last_config(config):
-
-    d = config.to_dict(False)
-
-    work_dir = config.work_dir
-
-    with open(os.path.join(work_dir, 'last_config.json'), 'w', encoding='utf-8') as f:
-        f.write(json.dumps(d, indent=4))
-
-
-
 def in_notebook():
     """ https://stackoverflow.com/questions/15411967/how-can-i-check-if-code-is-executed-in-the-ipython-notebook """
     try:
@@ -161,31 +149,7 @@ class CfgNode:
 
         return out
 
-    def merge_from_dict(self, d, only_keys=None):
 
-        if only_keys is not None:
-            d2 = {}
-            for key,val in d.items():
-                if key in only_keys:
-                    d2[key] = val
-            d = d2
-
-        self.__dict__.update(d)
-
-
-    def merge_from_config(self, other_config, only_root_keys=None):
-        """ copies all keys from other_config, then recurses into existing CfgNodes that both have """
-
-        for k, v in other_config.__dict__.items():
-
-            if only_root_keys is not None:
-                if k not in only_root_keys:
-                    continue
-
-            if isinstance(v, CfgNode) and hasattr(self,k) and isinstance(getattr(self,k), CfgNode):
-                getattr(self,k).merge_from_config(v)
-            else:
-                setattr(self, k, v)
 
 
     @staticmethod
@@ -210,6 +174,92 @@ class CfgNode:
                 return f
         else:
             return str(s)
+
+
+    def _obj_key_from_name(self, name):
+        keys = name.split('.')
+        obj = self
+        for k in keys[:-1]:
+            if not hasattr(obj, k):
+                return None,None
+            obj = getattr(obj, k)
+
+        leaf_name = keys[-1]
+        if hasattr(obj, leaf_name):
+            return obj,leaf_name
+        else:
+            return obj,None
+
+
+    def has(self, name):
+        obj,leaf = self._obj_key_from_name(name)
+        return leaf is not None
+
+    def get_or(self, name, default_value):
+        obj,leaf = self._obj_key_from_name(name)
+        if leaf is not None:
+            return getattr(obj, leaf)
+        else:
+            return default_value
+
+    def set(self, name, value):
+        keys = name.split('.')
+        obj = self
+        for k in keys[:-1]:
+            if not hasattr(obj, k):
+                return False
+            obj = getattr(obj, k)
+
+        leaf_name = keys[-1]
+        setattr(obj, leaf_name, value)
+        return True
+
+    def set_if_unset(self, name, value):
+        """ 1: set, 0: alreay set, -1: unable to set (bad path) """
+        keys = name.split('.')
+        obj = self
+        for k in keys[:-1]:
+            if not hasattr(obj, k):
+                return -1
+            obj = getattr(obj, k)
+
+        leaf_name = keys[-1]
+        if hasattr(obj, leaf_name):
+            return 0
+        else:
+            setattr(obj, leaf_name, value)
+            return 1
+
+
+    def merge_from_dict(self, d, only_root_keys=None, existing_only=False):
+        """ only_root_keys: local-level key names that can be merged - others are ignored """
+
+        if only_root_keys is not None:
+            d2 = {}
+            for key,val in d.items():
+                if key in only_root_keys:
+                    d2[key] = val
+            d = d2
+
+        for k,v in d.items():
+            if not existing_only or self.has(k):
+                self.set(k,v)
+
+
+
+    def merge_from_config(self, other_config, only_root_keys=None):
+        """ copies all keys from other_config, then recurses into existing CfgNodes that both have """
+
+        for k, v in other_config.__dict__.items():
+
+            if only_root_keys is not None:
+                if k not in only_root_keys:
+                    continue
+
+            if isinstance(v, CfgNode) and hasattr(self,k) and isinstance(getattr(self,k), CfgNode):
+                getattr(self,k).merge_from_config(v)
+            else:
+                setattr(self, k, v)
 
     def merge_from_args(self, args, key_must_exist):
         """
@@ -257,6 +307,7 @@ class CfgNode:
 
 
 
+
 def is_utf8(buffer_or_str):
     if isinstance(buffer_or_str, list):
         return False
@@ -280,6 +331,8 @@ def print_sepline():
 
 
 
+
+
 def cuda_max_memory_init():
     if not torch.cuda.is_available(): return
 
@@ -288,11 +341,12 @@ def cuda_max_memory_init():
     torch.cuda.reset_peak_memory_stats()
     torch.cuda.synchronize()
 
-def cuda_max_memory_print():
+def cuda_max_memory():
     if not torch.cuda.is_available(): return
 
     torch.cuda.synchronize()
     b = torch.cuda.max_memory_allocated()
-    print(f"CUDA max memory used: {b/1e6:.2f}M")
-
     cuda_max_memory_init()
+
+
+    return f"CUDA max memory used: {b/1e6:.2f}M"

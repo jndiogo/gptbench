@@ -14,7 +14,7 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
-from gptbench.utils import CfgNode, top_p
+from .utils import CfgNode, top_p
 
 
 # -----------------------------------------------------------------------------

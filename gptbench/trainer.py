@@ -8,7 +8,8 @@ from collections import defaultdict
 
 import torch
 from torch.utils.data.dataloader import DataLoader
-from gptbench.utils import CfgNode
+
+from .utils import CfgNode
 
 class Trainer:
 
@@ -21,7 +22,7 @@ class Trainer:
 
         c.batch_size = 32
 
-        c.max_iters = None
+        c.max_iters = None # optional absolute maximum iterations
 
         c.grad_norm_clip = 1.0
 
@@ -133,8 +134,12 @@ class Trainer:
 
             self.last_loss = loss.item()
 
+
             self.trigger_callbacks('on_batch_end')
-            
+
+            if not model.training: # callbacks may have moved to eval mode:
+                model.train()             
+
             self.iter_num += 1
 
             tnow = time.time()

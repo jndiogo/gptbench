@@ -10,27 +10,11 @@ from torch.utils.data.dataloader import DataLoader
 
 import tiktoken
 
-from gptbench.utils import CfgNode, is_utf8
-
-
-def dataset_get_default_config():
-    c = CfgNode()
-
-    c.class_name = None
-    c.train_path = None # default '' means dummy dataset with one sample, for sampling (for token encode/decode)
-    c.val_path_or_train_split = 0.9 # 0..1 float: train_split for validation dataset from train dataset, str: validation dataset path
-
-    return c
-
-def dataset_checkpoint_config_keys():
-    return ['class_name', 'train_path', 'val_path_or_train_split']
-
-
-def dataset_class_from_name(class_name):
-    return {'gpt2': GPT2TokensDataset, 'char': CharDataset}[class_name]
+from .utils import is_utf8
 
 
 
+# -----------------------------------------------------------------------------
 
 ''' 
 Don't store tiktoken in object, because tokenizer is not pickable: https://github.com/huggingface/datasets/issues/5769
@@ -49,26 +33,30 @@ class GPT2TokensDataset(Dataset):
     @staticmethod
     def load_train_val_datasets(train_path, val_path_or_train_split,
                                 block_size, 
-                                repeat_if_needed=False):
+                                repeat_if_needed=False,
+                                verbose=True):
         """ returns train_dataset, val_dataset - val dataset can be None """
 
-        data = GPT2TokensDataset.load_data(data_path=train_path, verbose=True)
+        data = GPT2TokensDataset.load_data(data_path=train_path, verbose=verbose)
 
         if isinstance(val_path_or_train_split, str): # val from path
-            train = GPT2TokensDataset(block_size, data=data, repeat_if_needed=repeat_if_needed)
-            val = GPT2TokensDataset(block_size, data_path=val_path_or_train_split, repeat_if_needed=repeat_if_needed)
+            train = GPT2TokensDataset(block_size, data=data, repeat_if_needed=repeat_if_needed, verbose=verbose)
+            val = GPT2TokensDataset(block_size, data_path=val_path_or_train_split, repeat_if_needed=repeat_if_needed, verbose=verbose)
 
         else: # split from train
             assert isinstance(val_path_or_train_split, float), "val_path_or_train_split can be of str (path) or float (train_split) types"
 
             assert val_path_or_train_split > 0. and val_path_or_train_split <= 1., "0 < train split <= 1"
 
+            # handle dummy dataset split:
             split_index = int(len(data) * val_path_or_train_split)
+            if split_index == 0 and len(data) == 1: # ensure a train dataset with one entry
+                split_index=1
 
-            train = GPT2TokensDataset(block_size, data=data[:split_index], repeat_if_needed=repeat_if_needed)
+            train = GPT2TokensDataset(block_size, data=data[:split_index], repeat_if_needed=repeat_if_needed, verbose=verbose)
 
-            if split_index < len(data):
-                val = GPT2TokensDataset(block_size, data=data[split_index:], repeat_if_needed=repeat_if_needed)
+            if split_index > 0 and split_index < len(data):
+                val = GPT2TokensDataset(block_size, data=data[split_index:], repeat_if_needed=repeat_if_needed, verbose=verbose)
             else:
                 val = None
 
@@ -107,18 +95,20 @@ class GPT2TokensDataset(Dataset):
 
 
 
-    def __init__(self, block_size, data=None, data_path=None, repeat_if_needed=False):
+    def __init__(self, block_size, data=None, data_path=None, repeat_if_needed=False, verbose=True):
         """ data is a np.array(dtype=np.uint16) 
         if both data and data_path are None, a dummy dataset with token id=0 is created
         repeat_if_needed: if data size is less than block_size+1, repeat existing data as many times as needed (complete repeats only)
         """
 
-        self.data = GPT2TokensDataset.load_data(data=data, data_path=data_path)
+        self.data = GPT2TokensDataset.load_data(data=data, data_path=data_path, verbose=verbose)
         # self.data is now encoded as uint16 tokens
 
         if len(self.data) < block_size+1 and repeat_if_needed:
             times = int(math.ceil((block_size+1) / len(self.data)))
-            print(f"Expanding initial dataset size of {len(self.data)} (less than block_size+1) by {times} times to size of {times*len(self.data)}")
+
+            if verbose:
+                print(f"Expanding initial dataset size of {len(self.data)} (less than block_size+1) by {times} times to size of {times*len(self.data)}")
             self.data = self.data * times
 
         assert len(self.data) > block_size, f"data length ({len(self.data)}) must be greater than block_size({block_size})"
@@ -215,6 +205,7 @@ class GPT2TokensDataset(Dataset):
 
 
 
+# -----------------------------------------------------------------------------
 
 class CharDataset(Dataset):
     """
@@ -225,20 +216,21 @@ class CharDataset(Dataset):
     @staticmethod
     def load_train_val_datasets(train_path, val_path_or_train_split,
                                 block_size, 
-                                repeat_if_needed=False):
+                                repeat_if_needed=False, 
+                                verbose=True):
         """ returns train_dataset, val_dataset - val dataset can be None """
 
-        data = CharDataset.load_data(data_path=train_path, verbose=True)
+        data = CharDataset.load_data(data_path=train_path, verbose=verbose)
 
         if isinstance(val_path_or_train_split, str): # val from path
 
-            val_data = CharDataset.load_data(data_path=val_path_or_train_split, verbose=True)
+            val_data = CharDataset.load_data(data_path=val_path_or_train_split, verbose=verbose)
 
             # calc combined vocab
             vocab_chars = CharDataset.calc_vocab_chars(data + val_data)
 
-            train = CharDataset(block_size, data=data, repeat_if_needed=repeat_if_needed, vocab_chars=vocab_chars)
-            val = CharDataset(block_size, data=val_data, repeat_if_needed=repeat_if_needed, vocab_chars=vocab_chars)
+            train = CharDataset(block_size, data=data, repeat_if_needed=repeat_if_needed, vocab_chars=vocab_chars, verbose=verbose)
+            val = CharDataset(block_size, data=val_data, repeat_if_needed=repeat_if_needed, vocab_chars=vocab_chars, verbose=verbose)
 
         else: # split from train
             assert isinstance(val_path_or_train_split, float), "val_path_or_train_split can be of str (path) or float (train_split) types"
@@ -247,12 +239,12 @@ class CharDataset(Dataset):
 
             split_index = int(len(data) * val_path_or_train_split)
 
-            train = CharDataset(block_size, data=data[:split_index], repeat_if_needed=repeat_if_needed)
+            train = CharDataset(block_size, data=data[:split_index], repeat_if_needed=repeat_if_needed, verbose=verbose)
 
             if split_index < len(data):
                 vocab_chars = train.get_vocab_chars()            
                 val = CharDataset(block_size, data=data[split_index:], repeat_if_needed=repeat_if_needed,
-                                  vocab_chars=vocab_chars)
+                                  vocab_chars=vocab_chars, verbose=verbose)
             else:
                 val = None
 
@@ -261,7 +253,7 @@ class CharDataset(Dataset):
 
 
     @staticmethod
-    def load_data(data=None, data_path=None, verbose=False):
+    def load_data(data=None, data_path=None, verbose=True):
 
         assert (data is not None) ^ (data_path is not None), "Dataset does not support dummy data: one of data and data_path must be given"
 
@@ -280,14 +272,16 @@ class CharDataset(Dataset):
         return sorted( list(set(data)) )
 
 
-    def __init__(self, block_size, data=None, data_path=None, repeat_if_needed=False, vocab_chars=None):
+    def __init__(self, block_size, data=None, data_path=None, repeat_if_needed=False, 
+                 vocab_chars=None,
+                 verbose=True):
 
         """ if vocab_chars is passed, it will be used instead of data's """
 
         assert (data is not None) ^ (data_path is not None), "only one of data and data_path must be given - does not support dummy data"
 
 
-        data = CharDataset.load_data(data=data, data_path=data_path)
+        data = CharDataset.load_data(data=data, data_path=data_path, verbose=verbose)
         # self.data is now encoded as uint16 tokens
 
         if vocab_chars is not None:            
@@ -302,7 +296,8 @@ class CharDataset(Dataset):
 
         if len(data) < block_size+1 and repeat_if_needed:
             times = int(math.ceil((block_size+1) / len(data)))
-            print(f"Expanding initial dataset size of {len(data)} (less than block_size+1) by {times} times to size of {times*len(data)}")
+            if verbose:
+                print(f"Expanding initial dataset size of {len(data)} (less than block_size+1) by {times} times to size of {times*len(data)}")
             data = data * times
 
         assert len(data) > block_size, f"data length ({len(data)}) must be greater than block_size({block_size})"
@@ -363,5 +358,14 @@ class CharDataset(Dataset):
         y = torch.tensor(dix[1:], dtype=torch.long)
         return x, y
 
+
+
+
+# -----------------------------------------------------------------------------
+
+DATASET_CLASS_MAP = {'gpt2': GPT2TokensDataset, 'char': CharDataset}
+
+def dataset_class_from_name(class_name):
+    return DATASET_CLASS_MAP[class_name]
 
 

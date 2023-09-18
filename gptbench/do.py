@@ -259,9 +259,6 @@ def run(part_config):
     elif part_config.mode == 'sample' or part_config.mode == 'prompt':
         do_train = False
 
-        # force 0 dropout when sampling
-        part_config.model.dropout=0.
-
     else:
         die('Config -mode= must be one of: train, sample, prompt')
 
@@ -272,7 +269,7 @@ def run(part_config):
     verbose = part_config.verbose if hasattr(part_config, 'verbose') else config.verbose
     seed = part_config.seed if hasattr(part_config, 'seed') else config.seed
 
-    set_seed(config.seed, verbose >= 2)
+    set_seed(seed, verbose >= 2)
 
 
     optimizer_state_dict = None
