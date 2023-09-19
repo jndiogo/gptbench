@@ -63,8 +63,7 @@ class Train(Sample):
 
     def train(self,
               batch_size=None, iter_num=None, over_trainer_config=None, 
-              batch_end_callback=None, over_train_config=None, 
-              **kwargs):
+              batch_end_callback=None, over_train_config=None, **kwargs):
 
         """ kwargs: key value of config.train settings """
 

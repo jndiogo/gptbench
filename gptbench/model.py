@@ -290,7 +290,7 @@ class GPT(nn.Module):
         if top >= -1. and top < 0.:
             top = max(1, int(self.vocab_size * -top))
 
-        for _ in range(max_new_tokens):
+        for i in range(max_new_tokens):
             # if the sequence context is growing too long we must crop it at block_size
             idx_cond = idx if idx.size(1) <= self.block_size else idx[:, -self.block_size:]
 
@@ -319,7 +319,7 @@ class GPT(nn.Module):
 
             stop=0
             if token_callback is not None:
-                stop = token_callback(idx_next) or 0
+                stop = token_callback(idx_next, islast=not bool(max_new_tokens-1-i)) or 0
 
             if stop == -1: # don't add and break
                 break

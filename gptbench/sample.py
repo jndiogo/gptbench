@@ -108,92 +108,6 @@ class Sample:
 
 
 
-    @torch.no_grad()
-    def sample(self, over_sample_config=None, stop_asap=None, **kwargs):
-        """ kwargs: key value of config.sample settings 
-        stop_asap=[False] - when set to True, sample will stop and return """
-
-
-        if over_sample_config is not None:
-            self.config.sample.merge_from_config(over_sample_config)
-
-        #override exsisting keys from kwargs
-        self.config.sample.merge_from_dict(kwargs, existing_only=True)
-
-
-        sample_config = self.config.sample
-
-        eot_token = self.train_dataset.get_eot_token()
-
-        self.model.eval()
-
-        start = self._get_valid_start(sample_config.start, self.train_dataset, True)
-        ix = self.train_dataset.encode(start)
-        x = torch.tensor(ix, dtype=torch.long).to(self.model.device)
-
-        if sample_config.per_token:
-
-            def emit(idx):
-
-                idx=idx[0].tolist()
-
-                is_eot = idx[0] == eot_token
-
-                if is_eot and sample_config.eot_stop==-1:
-                    return -1
-
-                chars = self.train_dataset.bufd_decode(idx)
-                print(chars, sep='', end='', flush=True)
-
-                if is_eot and sample_config.eot_stop==1:
-                    return -1
-
-                return 0
-
-
-            x = x.repeat([1, 1])
-
-            for t in range(sample_config.count):
-                if t: print_sepline()
-
-                print(start, sep='', end='')
-
-                self.model.generate(x, sample_config.len, temperature=sample_config.temp, do_sample=True, top=sample_config.top, 
-                               token_callback = emit if sample_config.per_token else None,
-                               stop_asap=stop_asap)
-
-                if stop_asap is not None and stop_asap[0]:
-                    return
-
-                # flush any buffered utf-8 characters
-                chars = self.train_dataset.bufd_flush()
-                print(chars, sep='', end='', flush=True)
-
-                print()
-
-
-        else:
-            x = x.repeat([sample_config.count, 1])
-            y = self.model.generate(x, sample_config.len, temperature=sample_config.temp, do_sample=True, top=sample_config.top, 
-                               token_callback = emit if sample_config.per_token else None,
-                               stop_asap=stop_asap)
-
-            if stop_asap is not None and stop_asap[0]:
-                return
-
-            for ir in range(y.size(0)):
-                if ir: print_sepline()
-
-                row = y[ir,:].tolist()
-
-                if sample_config.eot_stop:
-                  index = row.index(eot_token)
-                  if index >= 0:
-                    row = row[:index if sample_config.eot_stop==-1 else index+1]
-
-                completion = self.train_dataset.decode(row)
-
-                print(completion)
 
 
 
@@ -482,4 +396,120 @@ class Sample:
 
 
 
+
+
+    @torch.no_grad()
+    def sample_with_callback(self, start_text, max_len, temp, top, 
+                             chars_callback=None, token_callback=None, 
+                             stop_asap=None):
+        """
+        Sample a single row into chars_callback(str, islast) or token_callback(int, islast).
+        
+        Function chars_callback can receive a final call with empty chars and islast=True
+
+        Callbacks can return any non-None/zero value to stop sampling.
+        """
+
+        assert (chars_callback is None) ^ (token_callback is None), "Params chars_callback and token_callback are mutually exclusive"
+
+        self.model.eval()
+
+        start = self._get_valid_start(start_text, self.train_dataset, True)
+        ix = self.train_dataset.encode(start)
+        x = torch.tensor(ix, dtype=torch.long).to(self.model.device)
+
+        x = x.repeat([1, 1])
+
+        def emit_callback(idx, islast): # only complete decoded chars/entities are sent here
+            # idx.shape=(1,1)
+            idx=idx[0,0].item()
+
+            if token_callback is not None:
+                should_stop = token_callback(idx, islast)
+            else:
+                chars = self.train_dataset.bufd_decode(idx)
+                if islast:
+                    # flush any buffered characters
+                    chars += self.train_dataset.bufd_flush()
+
+                if len(chars) or islast: # always call on islast
+                    should_stop = callback(chars, islast=False)
+                else:
+                    should_stop = None
+
+            return should_stop
+
+
+        y = self.model.generate(x, max_len, temperature=temp, do_sample=True, top=top, 
+                                token_callback=emit_callback,
+                                stop_asap=stop_asap)
+
+        return y
+
+
+
+
+
+    @torch.no_grad()
+    def sample(self, stop_asap=None, over_sample_config=None, **kwargs):
+        """ kwargs: key value of config.sample settings 
+        stop_asap=[False] - when set to True, sample will stop and return """
+
+
+        if over_sample_config is not None:
+            self.config.sample.merge_from_config(over_sample_config)
+
+        #override exsisting keys from kwargs
+        self.config.sample.merge_from_dict(kwargs, existing_only=True)
+
+
+        sample_config = self.config.sample
+
+        eot_token = self.train_dataset.get_eot_token()
+
+        def token_emit(idx, islast):
+            nonlocal chars_buffer
+
+            is_eot = idx == eot_token
+
+            if is_eot and sample_config.eot_stop==-1:
+                return -1
+
+            chars = self.train_dataset.bufd_decode([idx])
+            chars_buffer += chars
+
+            if sample_config.per_token and len(chars):
+                print(chars, sep='', end='', flush=True)
+
+            if islast:
+                # flush any buffered utf-8 characters
+                chars = self.train_dataset.bufd_flush()
+                if len(chars):
+                    chars_buffer += chars
+                    if sample_config.per_token:
+                        print(chars, sep='', end='', flush=True)
+
+            if is_eot and sample_config.eot_stop==1:
+                return -1
+
+            return 0
+
+
+
+        for i in range(sample_config.count):
+            if i: print_sepline()
+
+            print(sample_config.start, sep='', end='', flush=True)
+
+            chars_buffer = ''
+
+            self.sample_with_callback(sample_config.start, sample_config.len, 
+                                      sample_config.temp, sample_config.top, 
+                                      token_callback=token_emit, 
+                                      stop_asap=stop_asap)
+
+            if not sample_config.per_token:
+                print(chars_buffer)
+            else:
+                print()
 
