@@ -11,13 +11,46 @@ from .dataset import dataset_class_from_name, DATASET_CLASS_MAP
 from .model import GPT
 from .trainer import Trainer
 
-from .config import empty_config, default_full_config, LogFlag, checkpoint_load, checkpoint_exists, sample_get_default_config, train_get_default_config, dataset_get_default_config, sample_checkpoint_config_keys, train_checkpoint_config_keys, dataset_checkpoint_config_keys
+from .config import empty_config, default_full_config, LogFlag, checkpoint_load, checkpoint_exists, dataset_get_default_config, dataset_checkpoint_config_keys
 
 from .utils import CfgNode, print_sepline, set_seed
 
 
+
 # -----------------------------------------------------------------------------
 class Sample:
+
+    @staticmethod
+    def get_default_config():
+
+        # sample.*
+        c = CfgNode()
+
+        c.count = 1 # number of generations
+        c.len = 100 # token count
+        
+        c.start = None # None: use random vocabulary item on each sampling. Or str with starting text
+        c.start_after = None
+        c.stop_before = None
+
+        c.per_token = 1 # display each token immediately
+        c.eot_stop = 0 # 0 don't stop, -1 stop before, 1 stop after (and display it)
+
+        c.top = 0 # top_k/top_p  0: off,  ]0..1]: top_p,  [-1..0[: top_k(vocab_size * -top),  >=1: top_k(int(n))
+        c.temp = 1. # temperature
+
+        c.multiline = 0 # prompt mode: input multiple lines until a Ctrl+D or Ctrl+Z (in Windows)
+
+        return c
+
+    @staticmethod
+    def checkpoint_config_keys():
+        return ['count', 'len', 'start', 'per_token', 'eot_stop', 'top', 'temp', 'multiline']
+
+
+
+
+
     def __init__(self, name='model', work_dir='./out', log_mask=LogFlag.ALL):
 
         self.name = name
@@ -54,7 +87,7 @@ class Sample:
 
 
 
-    def init(self, over_config):
+    def init_new(self, over_config):
         self._init('new', over_config)
 
     def init_pretrained(self, init_type, over_config):
@@ -69,10 +102,6 @@ class Sample:
         return checkpoint_exists(self._model_path_prefix)
 
 
-
-    @staticmethod
-    def get_empty_config():
-        return empty_config()
 
     def get_config(self):
         return copy.copy(self.config)
@@ -102,7 +131,7 @@ class Sample:
         ix = self.train_dataset.encode(start)
         x = torch.tensor(ix, dtype=torch.long).to(self.model.device)
 
-        if sample_config.pertoken:
+        if sample_config.per_token:
 
             def emit(idx):
 
@@ -110,13 +139,13 @@ class Sample:
 
                 is_eot = idx[0] == eot_token
 
-                if is_eot and sample_config.eotstop==-1:
+                if is_eot and sample_config.eot_stop==-1:
                     return -1
 
                 chars = self.train_dataset.bufd_decode(idx)
                 print(chars, sep='', end='', flush=True)
 
-                if is_eot and sample_config.eotstop==1:
+                if is_eot and sample_config.eot_stop==1:
                     return -1
 
                 return 0
@@ -130,7 +159,7 @@ class Sample:
                 print(start, sep='', end='')
 
                 self.model.generate(x, sample_config.len, temperature=sample_config.temp, do_sample=True, top=sample_config.top, 
-                               token_callback = emit if sample_config.pertoken else None,
+                               token_callback = emit if sample_config.per_token else None,
                                stop_asap=stop_asap)
 
                 if stop_asap is not None and stop_asap[0]:
@@ -146,7 +175,7 @@ class Sample:
         else:
             x = x.repeat([sample_config.count, 1])
             y = self.model.generate(x, sample_config.len, temperature=sample_config.temp, do_sample=True, top=sample_config.top, 
-                               token_callback = emit if sample_config.pertoken else None,
+                               token_callback = emit if sample_config.per_token else None,
                                stop_asap=stop_asap)
 
             if stop_asap is not None and stop_asap[0]:
@@ -157,10 +186,10 @@ class Sample:
 
                 row = y[ir,:].tolist()
 
-                if sample_config.eotstop:
+                if sample_config.eot_stop:
                   index = row.index(eot_token)
                   if index >= 0:
-                    row = row[:index if sample_config.eotstop==-1 else index+1]
+                    row = row[:index if sample_config.eot_stop==-1 else index+1]
 
                 completion = self.train_dataset.decode(row)
 
@@ -184,8 +213,8 @@ class Sample:
         'count',
         'len',
         #'start',
-        'pertoken',
-        'eotstop',
+        'per_token',
+        'eot_stop',
         'top',
         'temp',
         'multiline',
@@ -196,7 +225,7 @@ class Sample:
 
 
         sample_config = self.config.sample
-        sample_config.pertoken = 1 #  this is setting global config
+        sample_config.per_token = 1 #  this is setting global config
 
 
         stop_asap = [False]
@@ -304,19 +333,20 @@ class Sample:
         if init_type == 'new' or init_type == 'resume':
 
             if init_type == 'new':
-                self._log(LogFlag.INIT, f"Initializing new model {self.name}")
+                self.log(LogFlag.INIT, f"Initializing new model {self.name}")
 
                 model_state_dict = None
 
 
             else: # load checkpoint
+                from .train import Train
 
-                self._log(LogFlag.INIT, f"Loading checkpoint from {self._model_path_prefix}")
+                self.log(LogFlag.INIT, f"Loading checkpoint from {self._model_path_prefix}")
 
                 (model_state_dict, self._resumed_optimizer_state_dict, 
 
-                 train_config_dict,
                  sample_config_dict,
+                 train_config_dict,
 
                  model_config_dict,             
                  dataset_config_dict,
@@ -324,19 +354,19 @@ class Sample:
                 # only load optimizer state if do_train
 
                 # merge resumed configs into config
-                self.config.train.merge_from_dict(train_config_dict, train_checkpoint_config_keys())
-                self.config.sample.merge_from_dict(sample_config_dict, sample_checkpoint_config_keys())
+                self.config.sample.merge_from_dict(sample_config_dict, Sample.checkpoint_config_keys())
+                self.config.train.merge_from_dict(train_config_dict, Train.checkpoint_config_keys())
 
+                self.config.dataset.merge_from_dict(dataset_config_dict, dataset_checkpoint_config_keys())
                 self.config.model.merge_from_dict(model_config_dict, GPT.checkpoint_config_keys())
                 self.config.trainer.merge_from_dict(trainer_config_dict, Trainer.checkpoint_config_keys())
-                self.config.dataset.merge_from_dict(dataset_config_dict, dataset_checkpoint_config_keys())
 
                 #@ATTN - fix this:
                 # if resumed dataset file is no longer available: erase it - either over_config's or an empty dummy will be used
                 #if not os.path.isfile(config.dataset.train_path):
                 #    config.dataset.train_path = None
 
-                self._log(LogFlag.INIT, f"Checkpoint: iter_num={self.config.train.start_iter_num}, eval loss={self.config.train.start_eval_loss}", 2)
+                self.log(LogFlag.INIT, f"Checkpoint: iter_num={self.config.train.start_iter_num}, eval loss={self.config.train.start_eval_loss}", 2)
 
                 self.config.train.start_iter_num += 1 # continue after last iteration
 
@@ -362,7 +392,7 @@ class Sample:
 
         elif init_type.startswith('gpt'):
 
-            self._log(LogFlag.INIT, f"Initializing model from {init_type}")
+            self.log(LogFlag.INIT, f"Initializing model from {init_type}")
 
             # merge over_config into config for the final resolved config
             self.config.merge_from_config(over_config)
@@ -382,7 +412,7 @@ class Sample:
 
 
 
-        self._log(LogFlag.INIT, f"Dataset: {self.config.dataset.train_path if self.config.dataset.train_path else 'dummy empty dataset'} vocab_size: {self.train_dataset.get_vocab_size()}")
+        self.log(LogFlag.INIT, f"Dataset: {self.config.dataset.train_path if self.config.dataset.train_path else 'dummy empty dataset'} vocab_size: {self.train_dataset.get_vocab_size()}")
 
 
         # model and dataset(s) are now loaded, settle/resolve config options
@@ -390,11 +420,11 @@ class Sample:
         # check sample.start
         if self.config.sample.start is not None:
             if not train_dataset.is_text_valid(self.config.sample.start):
-                print(f"Config sample.start is not valid for dataset's vocabulary. Set to None (random)")
+                self.log(LogFlag.INIT, f"Config sample.start is not valid for dataset's vocabulary. Set to None (random)")
                 self.config.sample.start = None # random vocab item on each sampling
 
         if self.config.sample.top > self.config.model.vocab_size:
-            print(f'Config sample.top only up to vocab_size: {self.config.model.vocab_size}')
+            self.log(LogFlag.INIT, f'Config sample.top only up to vocab_size: {self.config.model.vocab_size}')
             self.config.sample.top = self.config.model.vocab_size
 
 
@@ -438,13 +468,18 @@ class Sample:
         return start
 
 
-    def _log(self, log_mask: LogFlag, *args, **kwargs):
-        if log_mask & self.log_mask:
+    def in_log(self, log_mask: LogFlag):
+        return bool(log_mask & self.log_mask)
+
+    def log(self, log_mask: LogFlag, *args, **kwargs):
+        if self.in_log(log_mask):
             print(*args, **kwargs)
+
 
 
     def _check_pretrained_type(self, type):
         assert type in ['gpt2', 'gpt2-medium', 'gpt2-large', 'gpt2-xl'], 'init type must be one of: new, resume, gpt2, gpt2-medium, gpt2-large, gpt2-xl'
+
 
 
 

@@ -22,7 +22,7 @@ class Trainer:
 
         c.batch_size = 32
 
-        c.max_iters = None # optional absolute maximum iterations
+        c.max_iters = None # absolute maximum iterations
 
         c.grad_norm_clip = 1.0
 
@@ -45,30 +45,49 @@ class Trainer:
 
     def __init__(self, trainer_config, train_dataset, model, 
                  start_iter_num = 0,
-                 optimizer = None):
+                 optimizer = None, optimizer_state_dict=None):
         self.config = trainer_config
 
         self.model = model
         self.train_dataset = train_dataset
         self.callbacks = defaultdict(list)
-        self.optimizer = optimizer
+
+        self.set_optimizer(optimizer, optimizer_state_dict)
 
         self.iter_num = self.start_iter_num = start_iter_num
+        self.run_iter_num = 0
 
         self.iter_time = 0.0
         self.iter_dt = 0.0
 
 
+    def set_optimizer(self, optimizer, optimizer_state_dict=None):
+        if optimizer is None:
+            self.optimizer = self.model.configure_optimizers(self.config)
+        else:
+            self.optimizer = optimizer
+
+        if optimizer_state_dict is not None:
+            self.optimizer.load_state_dict(optimizer_state_dict)
+
 
     def add_callback(self, onevent: str, callback):
         self.callbacks[onevent].append(callback)
 
-    def set_callback(self, onevent: str, callback):
-        self.callbacks[onevent] = [callback]
-
     def trigger_callbacks(self, onevent: str):
         for callback in self.callbacks.get(onevent, []):
             callback(self)
+
+    def del_callback(self, onevent: str, callback):
+        if onevent in self.callbacks:
+            cbs = self.callbacks
+            if callback in cbs:
+                cbs.remove(callback)
+
+    def clear_callbacks(self, onevent: str):
+        if onevent in self.callbacks:
+            self.callbacks.pop(onevent)
+
 
     def epoch_from_iter_num(self):
         return self.iter_num * self.config.batch_size / len(self.train_dataset)
@@ -76,9 +95,6 @@ class Trainer:
     def batches_for_epoch(self):
         return len(self.train_dataset) / self.config.batch_size
 
-    def set_optimizer_state_dict(self, state_dict):
-        self.optimizer = self.model.configure_optimizers(self.config)
-        self.optimizer.load_state_dict(state_dict)
 
     def get_start_iter_num(self):
         return self.start_iter_num
@@ -87,11 +103,16 @@ class Trainer:
         """ local means since start_iter_num """
         return self.iter_num - self.start_iter_num
 
-    def run(self):
-        model, config = self.model, self.config
+    def get_run_iter_num(self):
+        """ run means inside run(): 0..iter_count """
 
-        if self.optimizer is None:
-            self.optimizer = model.configure_optimizers(config)
+
+
+    def run(self, iter_count=None):
+
+        assert self.optimizer is not None, "Optimizer must already be setup"
+
+        model, config = self.model, self.config
 
         # setup the dataloader
         train_loader = DataLoader(
@@ -106,6 +127,9 @@ class Trainer:
         model.train()
 
         data_iter = iter(train_loader)
+
+
+        self.run_iter_num = 0
         self.last_loss = float('inf')
         self.iter_time = time.time()
         
@@ -141,11 +165,16 @@ class Trainer:
                 model.train()             
 
             self.iter_num += 1
+            self.run_iter_num += 1
 
             tnow = time.time()
             self.iter_dt = tnow - self.iter_time
             self.iter_time = tnow
 
             # termination conditions
+            if iter_count is not None and self.run_iter_num >= iter_count:
+                break
+
             if config.max_iters is not None and self.iter_num >= config.max_iters:
                 break
+

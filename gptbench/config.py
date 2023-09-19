@@ -8,9 +8,6 @@ from enum import IntFlag
 import torch
 
 
-from .model import GPT
-from .trainer import Trainer
-
 from .utils import CfgNode
 
 
@@ -19,11 +16,15 @@ from .utils import CfgNode
 """
 How config works:
 
-1) User code sets values on a config object got from empty_config()
+1) User code sets values on a config object got from empty_config().
 
-2) Any command line args are merged into that config with merge_config_from_sysargv()
+2) Any command line args are merged into this config with merge_config_from_sysargv() or when calling config_run().
 
-3) This partial config is then passed into run(). It's merged as needed into a default full config and any resumed checkpoint information, to get the final fully resolved config
+3) When needed (init, resumed, etc), a full default config is created inside GPT Bench.
+
+4) If resuming or launching a pretrained model, the full default config is overriden as needed.
+
+5) Finally, the user config from 1 and 2) overrides options from the full default config. This is the resolved config which will be used.
 
 
 """
@@ -33,11 +34,11 @@ def empty_config():
     """ an empty config: options that are later set will override the full config """
     c = CfgNode()
 
-    # train
-    c.train = CfgNode()
-
     # sample
     c.sample = CfgNode()
+
+    # train
+    c.train = CfgNode()
 
 
     # dataset
@@ -52,18 +53,26 @@ def empty_config():
     return c
 
 
+
 def default_full_config():
     """ returns a full config with all possible values """
+
+    from .sample import Sample
+    from .train import Train
+    from .model import GPT
+    from .trainer import Trainer
+
 
     c = empty_config()
 
     c.seed = 0 # 0 means random seed
 
-    # train
-    c.train = train_get_default_config()
 
     # sample
-    c.sample = sample_get_default_config()
+    c.sample = Sample.get_default_config()
+
+    # train
+    c.train = Train.get_default_config()
 
 
     # dataset
@@ -76,88 +85,6 @@ def default_full_config():
     c.trainer = Trainer.get_default_config()
 
     return c
-
-
-
-
-
-class LogFlag(IntFlag):
-    NONE = 0
-
-    INIT = 1
-
-    BATCH_DOT = 4
-    BATCH_LOSS = 8
-    EVAL_LOG = 16
-    TRAIN = BATCH_DOT | BATCH_LOSS | EVAL_LOG
-
-    CUDA_MEMORY = 256
-
-    ALL = INIT | BATCH_DOT | BATCH_LOSS | EVAL_LOG | CUDA_MEMORY
-
-
-
-
-
-# -----------------------------------------------------------------------------
-def sample_get_default_config():
-
-    # sample.*
-    c = CfgNode()
-
-    c.count = 1 # number of generations
-    c.len = 100 # token count
-    
-    c.start = None # None: use random vocabulary item on each sampling. Or str with starting text
-    c.start_after = None
-    c.stop_before = None
-
-    c.pertoken = 1 # display each token immediately
-    c.eotstop = 0 # 0 don't stop, -1 stop before, 1 stop after (and display it)
-
-    c.top = 0 # top_k/top_p  0: off,  ]0..1]: top_p,  [-1..0[: top_k(vocab_size * -top),  >=1: top_k(int(n))
-    c.temp = 1. # temperature
-
-    c.multiline = 0 # prompt mode: input multiple lines until a Ctrl+D or Ctrl+Z (in Windows)
-
-    return c
-
-def sample_checkpoint_config_keys():
-    return ['count', 'len', 'start', 'pertoken', 'eotstop', 'top', 'temp', 'multiline']
-
-
-
-
-
-
-# -----------------------------------------------------------------------------
-def train_get_default_config():
-
-    # train.*
-    c = CfgNode()
-
-    c.start_iter_num = 0
-    c.start_eval_loss = float('inf')
-    c.start_train_loss = float('inf')
-    c.start_val_loss = float('inf')
-
-    c.log_period = -0.1 # simple forward pass loss log. Negative numbers mean max(1, int(eval_period * -log_period))
-
-    c.eval_period = 100 # each n batches we eval and check if saving model. 0 for none
-    c.eval_type = 2 # how to estimate loss -> 1: on test data, 2: on val data (or test if no val dataset), 1|2=3: mean(test,val)
-    c.eval_iters = 100
-    c.eval_save_checkpt = 1 # 0=never, 1=on lower loss, 2=always
-
-    c.sample_period = 1000 # when to sample. 0 for never
-
-    c.debug = 0 # 0: none, 1: log cuda peak used memory on each evaluation, 2: print '.' per batch
-
-    return c
-
-
-def train_checkpoint_config_keys():
-    return ['start_iter_num', 'start_eval_loss', 'start_train_loss', 'start_val_loss', 'eval_period', 'eval_type', 'eval_iters', 'sample_period']
-
 
 
 
@@ -185,20 +112,12 @@ def merge_config_from_sysargv(sys_argv, base_config = None):
 
     argv = sys_argv[1:]
 
-    if len(argv) < 2: # at least mode, init
-        usage()
-        die()
-
     if base_config is not None:
         config = base_config
     else:
         config = empty_config()
 
     config.merge_from_args(argv, key_must_exist=False)
-
-    if not (hasattr(config, 'mode') and hasattr(config, 'init')):
-        usage()
-        die()
 
     return config
 
@@ -240,8 +159,8 @@ def checkpoint_load(path_prefix, load_optimizer_state):
     j = json.loads(js)
 
     return (model_state_dict, optimizer_state_dict,
-            j['train'],
             j['sample'],
+            j['train'],
 
             j['model'],
             j['dataset'],
@@ -252,8 +171,8 @@ def checkpoint_load(path_prefix, load_optimizer_state):
 def checkpoint_save(path_prefix, 
                     model, optimizer, 
 
-                    train_config_dict,
                     sample_config_dict,
+                    train_config_dict,
 
                     model_config_dict,
                     dataset_config_dict,
@@ -292,4 +211,28 @@ def checkpoint_exists(path_prefix):
     return ( os.path.isfile(path_prefix + ".pt") and 
              os.path.isfile(path_prefix + ".opti") and 
              os.path.isfile(path_prefix + ".json") )
+
+
+
+
+
+
+
+
+# -----------------------------------------------------------------------------
+class LogFlag(IntFlag):
+    NONE = 0
+
+    INIT = 1
+
+    BATCH_DOT = 4
+    BATCH_LOSS = 8
+    EVAL_LOG = 16
+    TRAIN = BATCH_DOT | BATCH_LOSS | EVAL_LOG
+
+    CUDA_MEMORY = 256
+
+    ALL = INIT | BATCH_DOT | BATCH_LOSS | EVAL_LOG | CUDA_MEMORY
+
+
 
