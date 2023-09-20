@@ -96,6 +96,9 @@ class Trainer:
         return len(self.train_dataset) / self.config.batch_size
 
 
+
+
+    # batch iterations
     def get_start_iter_num(self):
         return self.start_iter_num
 

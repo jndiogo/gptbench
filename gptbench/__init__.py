@@ -1,12 +1,15 @@
+""" GPT Bench """
+
 __version__ = '0.0.1'
 
 __all__ = [
     'Sample', 'LogFlag',
     'Train',
     'GPT2TokensDataset', 'CharDataset',
-    'empty_config', 'config_run', 'merge_config_from_sysargv',
-    'consumme_decode_utf8'
+    'empty_config', 'config_run', 'merge_config_from_sysargv'
 ]
+
+__author__ = 'Jorge Diogo'
 
 from .sample import Sample
 from .train import Train

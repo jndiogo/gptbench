@@ -30,7 +30,7 @@ if __name__ == '__main__':
     sep=sep.replace('\\n', '\n')
     sep=sep.replace('\\t', '\t')
 
-    mult = 0
+    mult = 1
     if 'reverse' in args.features:
         mult+=1
     if 'commutative' in args.features:

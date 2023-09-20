@@ -266,6 +266,8 @@ class GPT(nn.Module):
 
         return logits, loss
 
+        
+
     @torch.no_grad()
     def generate(self, idx, max_new_tokens, temperature=1.0, do_sample=False, top=0, 
                  token_callback=None, stop_asap=None):

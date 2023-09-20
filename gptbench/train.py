@@ -7,7 +7,7 @@ import os, sys, copy, signal, json
 import torch
 
 
-from .sample import Sample, LogFlag
+from .sample import Sample, LogFlag, DEFAULT_NAME, DEFAULT_WORK_DIR
 
 from .model import GPT
 from .trainer import Trainer
@@ -48,12 +48,12 @@ class Train(Sample):
 
     @staticmethod
     def checkpoint_config_keys():
-        return ['start_iter_num', 'start_eval_loss', 'start_train_loss', 'start_val_loss', 'eval_period', 'eval_type', 'eval_iters', 'sample_period']
+        return ['start_iter_num', 'start_eval_loss', 'start_train_loss', 'start_val_loss', 'log_period', 'eval_period', 'eval_type', 'eval_iters', 'eval_save_checkpt', 'sample_period']
 
 
 
 
-    def __init__(self, name='model', work_dir='./out', log_mask=LogFlag.ALL):
+    def __init__(self, name=DEFAULT_NAME, work_dir=DEFAULT_WORK_DIR, log_mask=LogFlag.ALL):
         super().__init__(name, work_dir, log_mask)
 
         self.trainer = None
@@ -225,7 +225,7 @@ class Train(Sample):
         dup_train_config.start_train_loss = start_train_loss
         dup_train_config.start_val_loss = start_val_loss
 
-        checkpoint_save(self._model_path_prefix, 
+        checkpoint_save(self.path_prefix, 
                         self.model, self.trainer.optimizer,
 
                         self.config.sample.to_dict(False, Sample.checkpoint_config_keys()),

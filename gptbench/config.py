@@ -123,21 +123,6 @@ def merge_config_from_sysargv(sys_argv, base_config = None):
 
 
 
-# -----------------------------------------------------------------------------
-def save_last_config(config):
-
-    d = config.to_dict(False)
-
-    work_dir = config.work_dir
-
-    with open(os.path.join(work_dir, 'last_config.json'), 'w', encoding='utf-8') as f:
-        f.write(json.dumps(d, indent=4))
-
-
-
-
-
-
 
 
 

@@ -30,12 +30,14 @@ def config_run(config, sys_argv = None):
     if config.has('work_dir'):
         ops['work_dir'] = config.work_dir
 
+
     if config.mode == 'train':
         do = Train(**ops)
     elif config.mode == 'sample' or config.mode == 'prompt':
         do = Sample(**ops)
     else:
         assert False, f"Unknown mode '{config.mode}'"
+
 
     # init
     if config.init == 'new':
@@ -49,6 +51,14 @@ def config_run(config, sys_argv = None):
 
     else:
         assert False, f"Unknown init '{config.init}'"
+
+
+    if sys_argv is not None and config.init != 'resume': # save argv cmd
+        cmd = ' '.join(sys_argv)
+
+        text = cmd + '\n\nConfig:\n' + str(do.config)
+
+        do.path_prefix_save('.ini', text)
 
 
     # train or sample

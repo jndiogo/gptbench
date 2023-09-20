@@ -18,6 +18,9 @@ from .utils import CfgNode, print_sepline, set_seed
 
 
 # -----------------------------------------------------------------------------
+DEFAULT_NAME = 'model'
+DEFAULT_WORK_DIR = './checkpoints'
+
 class Sample:
 
     @staticmethod
@@ -51,7 +54,7 @@ class Sample:
 
 
 
-    def __init__(self, name='model', work_dir='./out', log_mask=LogFlag.ALL):
+    def __init__(self, name=DEFAULT_NAME, work_dir=DEFAULT_WORK_DIR, log_mask=LogFlag.ALL):
 
         self.name = name
         self.work_dir = work_dir
@@ -65,7 +68,8 @@ class Sample:
         self.train_dataset = None
         self.val_dataset = None
 
-        self._model_path_prefix = os.path.join(self.work_dir, self.name)
+        self.path_prefix = os.path.join(self.work_dir, self.name)
+
         self._resumed_optimizer_state_dict = None
         self._can_train = False
 
@@ -99,7 +103,7 @@ class Sample:
 
 
     def can_resume(self):
-        return checkpoint_exists(self._model_path_prefix)
+        return checkpoint_exists(self.path_prefix)
 
 
 
@@ -255,7 +259,7 @@ class Sample:
             else: # load checkpoint
                 from .train import Train
 
-                self.log(LogFlag.INIT, f"Loading checkpoint from {self._model_path_prefix}")
+                self.log(LogFlag.INIT, f"Loading checkpoint from {self.path_prefix}")
 
                 (model_state_dict, self._resumed_optimizer_state_dict, 
 
@@ -264,7 +268,7 @@ class Sample:
 
                  model_config_dict,             
                  dataset_config_dict,
-                 trainer_config_dict) = checkpoint_load(self._model_path_prefix, load_optimizer_state=self._can_train)
+                 trainer_config_dict) = checkpoint_load(self.path_prefix, load_optimizer_state=self._can_train)
                 # only load optimizer state if do_train
 
                 # merge resumed configs into config
@@ -424,16 +428,28 @@ class Sample:
         start_text = self._get_valid_start_text(sample_config.start_text, self.train_dataset, True)
 
         count = sample_config.count
+        if sample_config.per_token:
+            count = 1
+
+        def print_callback(strlist,islast):
+
+            if sample_config.per_token: # use the first lie only
+                print(strlist[0], sep='', end='', flush=True)
+                if islast:
+                    print()
+
+            else:
+                for c in range(len(strlist)):
+                    if c: print_sepline()
+                    print(strlist[c])
 
 
-        chars_buffer = [''] * count
-
-        self._sample(None,
-                     start_text, 
-                     count, sample_config.max_len, 
-                     sample_config.temp, sample_config.top, 
-                     sample_config.eot_stop, sample_config.per_token,
-                     stop_asap)
+        self.sample_callback(print_callback,
+                             start_text, 
+                             count, sample_config.max_len, 
+                             sample_config.temp, sample_config.top, 
+                             sample_config.eot_stop, sample_config.per_token,
+                             stop_asap)
 
 
 
@@ -441,13 +457,14 @@ class Sample:
 
 
     @torch.no_grad()
-    def _sample(self, 
-                chars_callback,
-                start_text, count, max_len, 
-                temp, top,
-                eot_stop, per_token,
-                
-                stop_asap=None):
+    def sample_callback(self, 
+                        chars_callback,
+                        start_text, count, max_len, 
+                        temp, top,
+                        eot_stop, per_token,
+                        
+                        emit_start_text=True,
+                        stop_asap=None):
 
         """
         stop_asap=[False] - when set to True, sample will stop and return.
@@ -485,19 +502,21 @@ class Sample:
                 chars = new_chars[ib]
 
                 if emitting:
-                    if not emitted[ib]:
+
+                    if not emitted[ib]: # not yet emitted
                         emitted[ib]=True
-                        chars = start_text + chars
+                        if emit_start_text:
+                            chars = start_text + chars
 
-                    if per_token and len(chars):
-                        print(chars, sep='', end='', flush=True)
-                    else:
-                        chars_buffer[ib] += chars
-
+                    chars_buffer[ib] += chars
 
                     if eot_stop==1 and id == eot_token:
                         emitting[ib] = False
                         continue
+
+            if per_token:
+                chars_callback(chars_buffer, islast=islast)
+                chars_buffer = [''] * count
 
             return all(emitted) and not any(emitting) # stop generating if...
 
@@ -516,12 +535,8 @@ class Sample:
                                 stop_asap=stop_asap)
 
 
-        if not per_token: # print buffered
-
-            for c in range(len(chars_buffer)):
-                if c: print_sepline()
-
-                print(chars_buffer[c])
+        if (not per_token) and not (stop_asap is not None and stop_asap[0]): # emit buffered - but not if stop_asap
+            chars_callback(chars_buffer, islast=True)
 
 
         return y
@@ -529,50 +544,9 @@ class Sample:
 
 
 
+    def path_prefix_save(self, suffix_ext, text):
 
-
-    @torch.no_grad()
-    def _sample_with_callback(self, 
-                              start_text, count, max_len, 
-                              temp, top, 
-                              chars_callback=None, token_callback=None, 
-                              stop_asap=None):
-        """
-        Sample into chars_callback(str-list, islast) or token_callback(numpy2D, islast).
-
-        chars_callback can be called with empty strings in list
-        
-        Callbacks can return any non-None/zero value to stop sampling.
-        """
-
-        assert (chars_callback is None) ^ (token_callback is None), "Params chars_callback and token_callback are mutually exclusive"
-
-        self.model.eval()
-
-        ix = self.train_dataset.encode(start_text)
-        x = torch.tensor(ix, dtype=torch.long).to(self.model.device)
-
-        x = x.repeat([count, 1])
-
-        def emit_callback(idx, islast): # only complete decoded chars/entities are sent here
-            # idx.shape=(count,1)
-            idx=idx.numpy(force=True)
-
-            if token_callback is not None:
-                should_stop = token_callback(idx, islast)
-            else:
-                chars = self.train_dataset.bufd_decode(idx)
-                should_stop = callback(chars, islast=islast)
-
-            return should_stop
-
-
-        y = self.model.generate(x, max_len, temperature=temp, do_sample=True, top=top, 
-                                token_callback=emit_callback,
-                                stop_asap=stop_asap)
-
-        return y
-
-
+        with open(self.path_prefix + suffix_ext, 'w', encoding='utf-8') as f:
+            f.write(text)
 
 
