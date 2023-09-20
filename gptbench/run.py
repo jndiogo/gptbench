@@ -50,6 +50,7 @@ def config_run(config, sys_argv = None):
     else:
         assert False, f"Unknown init '{config.init}'"
 
+
     # train or sample
     if config.mode == 'train':
         do.train()

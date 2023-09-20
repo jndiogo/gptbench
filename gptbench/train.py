@@ -62,27 +62,27 @@ class Train(Sample):
 
 
     def train(self,
-              batch_size=None, iter_num=None, over_trainer_config=None, 
-              batch_end_callback=None, over_train_config=None, **kwargs):
+              over_trainer_config=None, batch_size=None, iter_num=None, 
+              over_train_config=None, batch_end_callback=None, **over_train_config_kwargs):
 
         """ kwargs: key value of config.train settings """
 
 
         # trainer config ----------------------------------------------------
+        if over_trainer_config is not None:
+            self.config.trainer.merge_from_config(over_trainer_config)
         if batch_size is not None:
             self.config.trainer.batch_size = batch_size
         if iter_num is not None:
             self.config.trainer.iter_num = iter_num
-        if over_trainer_config is not None:
-            self.config.trainer.merge_from_config(over_trainer_config)
 
         # train config ------------------------------------------------------
-        if batch_end_callback is not None:
-            self.config.train.batch_end_callback = batch_end_callback
         if over_train_config is not None:
             self.config.train.merge_from_config(over_train_config)
+        if batch_end_callback is not None:
+            self.config.train.batch_end_callback = batch_end_callback
         #override existing keys from kwargs
-        self.config.train.merge_from_dict(kwargs, existing_only=True)
+        self.config.train.merge_from_dict(over_train_config_kwargs, existing_only=True)
 
 
         # resolve train config

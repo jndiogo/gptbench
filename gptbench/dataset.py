@@ -7,10 +7,11 @@ import os, sys, copy, array, random, math, pdb
 import torch
 from torch.utils.data import Dataset
 from torch.utils.data.dataloader import DataLoader
+import numpy as np
 
 import tiktoken
 
-from .utils import is_utf8
+from .utils import is_utf8, consumme_decode_utf8
 
 
 
@@ -120,7 +121,7 @@ class GPT2TokensDataset(Dataset):
 
         self.data_len = len(self.data) - self.block_size
 
-        self.decode_buffer = b'' # partial utf-8 undecoded byte list
+        self.bufd_decode_list = [] # partial utf-8 undecoded byte list
 
 
     def get_vocab_size(self):
@@ -157,38 +158,98 @@ class GPT2TokensDataset(Dataset):
             return enc.encode(text, allowed_special={"<|endoftext|>"})
         else:
             return text # already encoded int array
+            
 
     # can return incorrect utf-8 sequences, chars will be replaced with ? chars
-    def decode(self, ids):
+    def decode(self, ids, errors='replace'):
+        ''' Incorrect utf-8 code points are dealt with errors param of bytes.decode()
+
+            ids can be: an int or list of ints (str output), or a numpy 2D array (str list output) "
+        '''
+
         enc = GPT2_ENC # tiktoken.get_encoding("gpt2")
-        text = enc.decode(ids, errors='replace')
-        return text
+
+        if isinstance(ids,np.ndarray):
+            assert ids.ndim == 2, "Only 2d numpy arrays supported"
+            str_out = False
+
+        elif isinstance(ids,int):
+            ids = np.array([[ids]]) # shape=(1,t)
+            str_out = True
+
+        elif isinstance(ids, list):
+            ids = np.array([ids]) # shape=(1,t)
+            str_out = True
+
+        else:
+            assert False, "Only numpy 2D arrays, int lists or int supported"
+
+        #print(ids.shape, ids)
+        b,t=ids.shape
+        out=[]
+
+        for ib in range(b):
+            row = ids[ib,:].tolist()
+            text = enc.decode(row, errors=errors)
+            out.append(text)
+
+        if str_out:
+            return out[0] # type str
+        else:
+            return out # type str list with len = b
 
 
     def bufd_decode(self, ids):
-        ''' buffered token bytes -> utf-8 decoding. If token(s) doesn't map to a valid utf-8 char we buffer the bytes and prepend it to next call's, which will hopefully allow decoding to utf-8 '''
-        if len(ids):
-            enc = GPT2_ENC # tiktoken.get_encoding("gpt2")
-            blist = enc.decode_tokens_bytes(ids)
-        else: # for flush
-            blist = []
+        ''' Buffered token bytes -> utf-8 decoding. If tokens don't map to a valid utf-8 char, we buffer the bytes and prepend it to next call's, which will hopefully allow decoding to utf-8
 
-        bl=self.decode_buffer
-        for b in blist:            
-            bl = bl + b
+            ids can be: an int or list of ints (str output), or a numpy 2D array (str list output) "
+        '''
 
-        try:
-            text = bl.decode("utf-8", errors='strict')
-            self.decode_buffer = b''
-            return text
-        except UnicodeDecodeError:
-            self.decode_buffer = bl # accumulate. TODO: We could try decoding all bytes up to an invalid one
-            return ''
+        enc = GPT2_ENC # tiktoken.get_encoding("gpt2")
 
-    def bufd_flush(self):
-        text = self.bufd_decode([])
-        self.decode_buffer = b'' # ensure buffer cleaned
-        return text
+        if isinstance(ids,np.ndarray):
+            assert ids.ndim == 2, "Only 2d numpy arrays supported"
+            str_out = False
+
+        elif isinstance(ids,int):
+            ids = np.array([[ids]]) # shape=(1,t)
+            str_out = True
+
+        elif isinstance(ids, list):
+            ids = np.array([ids]) # shape=(1,t)
+            str_out = True
+
+        else:
+            assert False, "Only numpy 2D arrays, int lists or int supported"
+
+        #print(ids.shape, ids)
+        b,t=ids.shape
+        out=[]
+
+        if len(self.bufd_decode_list) != b: # resize and clear
+            self.bufd_decode_list = [b''] * b
+
+        for ib in range(b):
+            row = ids[ib,:].tolist()
+
+            if len(row):
+                dec_list = enc.decode_tokens_bytes(row) # a list with bytes
+            else: # for flush
+                dec_list = []
+
+            bl=self.bufd_decode_list[ib]
+            for b in dec_list:            
+                bl = bl + b
+
+            text,undec = consumme_decode_utf8(bl)
+            self.bufd_decode_list[ib] = undec
+            out.append(text)
+
+        if str_out:
+            return out[0] # type str
+        else:
+            return out # type str list with len = b
+
 
 
     def __getitem__(self, idx):
@@ -336,16 +397,13 @@ class CharDataset(Dataset):
     def encode(self, text):
         return [self.stoi[id] for id in text]
 
+
     def decode(self, ids):        
         return ''.join([self.itos[int(i)] for i in ids])
-
 
     def bufd_decode(self, ids):
         """ chars are always utf-8 complete, so just use normal decode """
         return self.decode(ids)
-
-    def bufd_flush(self):
-        return ''
 
 
     def __getitem__(self, idx):

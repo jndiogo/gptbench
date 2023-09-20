@@ -5,7 +5,7 @@
 import os, sys, copy, signal, json
 
 import torch
-
+import numpy as np
 
 from .dataset import dataset_class_from_name, DATASET_CLASS_MAP
 from .model import GPT
@@ -27,9 +27,9 @@ class Sample:
         c = CfgNode()
 
         c.count = 1 # number of generations
-        c.len = 100 # token count
+        c.max_len = 100 # max generated token count
         
-        c.start = None # None: use random vocabulary item on each sampling. Or str with starting text
+        c.start_text = None # None: use random vocabulary item on each sampling. Or str with starting text
         c.start_after = None
         c.stop_before = None
 
@@ -45,7 +45,7 @@ class Sample:
 
     @staticmethod
     def checkpoint_config_keys():
-        return ['count', 'len', 'start', 'per_token', 'eot_stop', 'top', 'temp', 'multiline']
+        return ['count', 'max_len', 'start_text', 'per_token', 'eot_stop', 'top', 'temp', 'multiline']
 
 
 
@@ -114,7 +114,7 @@ class Sample:
 
 
     @torch.no_grad()
-    def prompt(self, sample_config=None):
+    def prompt(self):
         """ """
 
         allowed_cmds = [
@@ -123,10 +123,10 @@ class Sample:
         'quit',
         'config',
 
-        'start',
+        'start_text',
         'count',
-        'len',
-        #'start',
+        'max_len',
+
         'per_token',
         'eot_stop',
         'top',
@@ -220,7 +220,7 @@ class Sample:
                     break
             else:
                 p = p.replace("\\n", "\n")
-                sample_config.start = p
+                sample_config.start_text = p
 
                 stop_asap = [False]
                 signal.signal(signal.SIGINT, signal_handler)
@@ -332,10 +332,10 @@ class Sample:
         # model and dataset(s) are now loaded, settle/resolve config options
        
         # check sample.start
-        if self.config.sample.start is not None:
-            if not train_dataset.is_text_valid(self.config.sample.start):
-                self.log(LogFlag.INIT, f"Config sample.start is not valid for dataset's vocabulary. Set to None (random)")
-                self.config.sample.start = None # random vocab item on each sampling
+        if self.config.sample.start_text is not None:
+            if not train_dataset.is_text_valid(self.config.sample.start_text):
+                self.log(LogFlag.INIT, f"Config sample.start_text is not valid for dataset's vocabulary. Set to None (random)")
+                self.config.sample.start_text = None # random vocab item on each sampling
 
         if self.config.sample.top > self.config.model.vocab_size:
             self.log(LogFlag.INIT, f'Config sample.top only up to vocab_size: {self.config.model.vocab_size}')
@@ -371,15 +371,15 @@ class Sample:
 
 
 
-    def _get_valid_start(self, start, dataset, warn):
+    def _get_valid_start_text(self, start_text, dataset, warn):
 
-        if start is None or not dataset.is_text_valid(start):
-            new_start = dataset.get_random_vocab_item()
-            if start is not None and warn:
-                print(f"Text '{start}' includes tokens/chars not available in the dataset. Using random '{new_start}' instead")
-            start = new_start
+        if start_text is None or not dataset.is_text_valid(start_text):
+            new_start_text = dataset.get_random_vocab_item()
+            if start_text is not None and warn:
+                print(f"Text '{start_text}' includes tokens/chars not available in the dataset. Using random '{new_start_text}' instead")
+            start_text = new_start_text
 
-        return start
+        return start_text
 
 
     def in_log(self, log_mask: LogFlag):
@@ -398,15 +398,150 @@ class Sample:
 
 
 
-    @torch.no_grad()
-    def sample_with_callback(self, start_text, max_len, temp, top, 
-                             chars_callback=None, token_callback=None, 
-                             stop_asap=None):
-        """
-        Sample a single row into chars_callback(str, islast) or token_callback(int, islast).
-        
-        Function chars_callback can receive a final call with empty chars and islast=True
 
+
+    @torch.no_grad()
+    def sample(self, stop_asap=None, 
+               over_sample_config=None, **over_sample_config_kwargs):
+
+        """
+        stop_asap=[False] - when set to True, sample will stop and return.
+
+        over_sample_config: partial config to override config.sample settings.
+        over_sample_config_kwargs: key values to override config.sample settings (and any over_sample_config).
+
+        """
+
+        #override existing keys
+        if over_sample_config is not None:
+            self.config.sample.merge_from_config(over_sample_config)
+        self.config.sample.merge_from_dict(over_sample_config_kwargs, existing_only=True)
+
+
+
+        sample_config = self.config.sample
+
+        start_text = self._get_valid_start_text(sample_config.start_text, self.train_dataset, True)
+
+        count = sample_config.count
+
+
+        chars_buffer = [''] * count
+
+        self._sample(None,
+                     start_text, 
+                     count, sample_config.max_len, 
+                     sample_config.temp, sample_config.top, 
+                     sample_config.eot_stop, sample_config.per_token,
+                     stop_asap)
+
+
+
+
+
+
+    @torch.no_grad()
+    def _sample(self, 
+                chars_callback,
+                start_text, count, max_len, 
+                temp, top,
+                eot_stop, per_token,
+                
+                stop_asap=None):
+
+        """
+        stop_asap=[False] - when set to True, sample will stop and return.
+
+        """
+
+        sample_config = self.config.sample
+
+        eot_token = self.train_dataset.get_eot_token()
+
+        # parallel emitting along batch dim count
+        chars_buffer = [''] * count
+        emitting = [True] * count 
+        emitted = [False] * count # any emission before?
+
+
+        def emit_callback(idx, islast):
+            # idx.shape=(count,1)
+            idx=idx.numpy(force=True)
+
+            nonlocal chars_buffer, emitting, emitted
+
+            b=idx.shape[0]
+
+            new_chars = self.train_dataset.bufd_decode(idx)
+
+            for ib in range(b):
+
+                id = idx[ib]
+
+                if eot_stop==-1 and id == eot_token:
+                    emitting[ib] = False
+                    continue
+
+                chars = new_chars[ib]
+
+                if emitting:
+                    if not emitted[ib]:
+                        emitted[ib]=True
+                        chars = start_text + chars
+
+                    if per_token and len(chars):
+                        print(chars, sep='', end='', flush=True)
+                    else:
+                        chars_buffer[ib] += chars
+
+
+                    if eot_stop==1 and id == eot_token:
+                        emitting[ib] = False
+                        continue
+
+            return all(emitted) and not any(emitting) # stop generating if...
+
+
+
+
+        self.model.eval()
+
+        ix = self.train_dataset.encode(start_text)
+        x = torch.tensor(ix, dtype=torch.long).to(self.model.device)
+
+        x = x.repeat([count, 1])
+
+        y = self.model.generate(x, max_len, temperature=temp, do_sample=True, top=top, 
+                                token_callback=emit_callback,
+                                stop_asap=stop_asap)
+
+
+        if not per_token: # print buffered
+
+            for c in range(len(chars_buffer)):
+                if c: print_sepline()
+
+                print(chars_buffer[c])
+
+
+        return y
+
+
+
+
+
+
+    @torch.no_grad()
+    def _sample_with_callback(self, 
+                              start_text, count, max_len, 
+                              temp, top, 
+                              chars_callback=None, token_callback=None, 
+                              stop_asap=None):
+        """
+        Sample into chars_callback(str-list, islast) or token_callback(numpy2D, islast).
+
+        chars_callback can be called with empty strings in list
+        
         Callbacks can return any non-None/zero value to stop sampling.
         """
 
@@ -414,28 +549,20 @@ class Sample:
 
         self.model.eval()
 
-        start = self._get_valid_start(start_text, self.train_dataset, True)
-        ix = self.train_dataset.encode(start)
+        ix = self.train_dataset.encode(start_text)
         x = torch.tensor(ix, dtype=torch.long).to(self.model.device)
 
-        x = x.repeat([1, 1])
+        x = x.repeat([count, 1])
 
         def emit_callback(idx, islast): # only complete decoded chars/entities are sent here
-            # idx.shape=(1,1)
-            idx=idx[0,0].item()
+            # idx.shape=(count,1)
+            idx=idx.numpy(force=True)
 
             if token_callback is not None:
                 should_stop = token_callback(idx, islast)
             else:
                 chars = self.train_dataset.bufd_decode(idx)
-                if islast:
-                    # flush any buffered characters
-                    chars += self.train_dataset.bufd_flush()
-
-                if len(chars) or islast: # always call on islast
-                    should_stop = callback(chars, islast=False)
-                else:
-                    should_stop = None
+                should_stop = callback(chars, islast=islast)
 
             return should_stop
 
@@ -448,68 +575,4 @@ class Sample:
 
 
 
-
-
-    @torch.no_grad()
-    def sample(self, stop_asap=None, over_sample_config=None, **kwargs):
-        """ kwargs: key value of config.sample settings 
-        stop_asap=[False] - when set to True, sample will stop and return """
-
-
-        if over_sample_config is not None:
-            self.config.sample.merge_from_config(over_sample_config)
-
-        #override exsisting keys from kwargs
-        self.config.sample.merge_from_dict(kwargs, existing_only=True)
-
-
-        sample_config = self.config.sample
-
-        eot_token = self.train_dataset.get_eot_token()
-
-        def token_emit(idx, islast):
-            nonlocal chars_buffer
-
-            is_eot = idx == eot_token
-
-            if is_eot and sample_config.eot_stop==-1:
-                return -1
-
-            chars = self.train_dataset.bufd_decode([idx])
-            chars_buffer += chars
-
-            if sample_config.per_token and len(chars):
-                print(chars, sep='', end='', flush=True)
-
-            if islast:
-                # flush any buffered utf-8 characters
-                chars = self.train_dataset.bufd_flush()
-                if len(chars):
-                    chars_buffer += chars
-                    if sample_config.per_token:
-                        print(chars, sep='', end='', flush=True)
-
-            if is_eot and sample_config.eot_stop==1:
-                return -1
-
-            return 0
-
-
-
-        for i in range(sample_config.count):
-            if i: print_sepline()
-
-            print(sample_config.start, sep='', end='', flush=True)
-
-            chars_buffer = ''
-
-            self.sample_with_callback(sample_config.start, sample_config.len, 
-                                      sample_config.temp, sample_config.top, 
-                                      token_callback=token_emit, 
-                                      stop_asap=stop_asap)
-
-            if not sample_config.per_token:
-                print(chars_buffer)
-            else:
-                print()
 

@@ -326,6 +326,49 @@ def is_utf8(buffer_or_str):
 
 
 
+def consumme_decode_utf8(b):
+    """
+    Decode as many utf-8 code points as possible, returning those and the unconsummed bytes.
+    Param b is a bytes variable.
+    See https://en.wikipedia.org/wiki/UTF-8
+    """
+
+    text=''
+
+    try:
+        while lb :=len(b):
+
+            if b[0] <= 0x007f:
+                text += chr(b[0])
+                b = b[1:]
+
+            elif lb >= 2 and ( 
+                 ((b[0]>>5) & 0b111 == 0b110) and ((b[1]>>6) & 0b11 == 0b10)
+                 ):
+                text += b[:2].decode('utf-8', errors='strict')
+                b = b[2:]
+
+            elif lb >= 3 and (
+                 ((b[0]>>4) & 0b1111 == 0b1110) and ((b[1]>>6) & 0b11 == 0b10) and ((b[2]>>6) & 0b11 == 0b10)
+                 ):
+                text += b[:3].decode('utf-8', errors='strict')
+                b = b[3:]
+
+            elif lb >= 4 and (
+                 ((b[0]>>3) & 0b11111 == 0b11110) and ((b[1]>>6) & 0b11 == 0b10) and ((b[2]>>6) & 0b11 == 0b10) and ((b[3]>>6) & 0b11 == 0b10)
+                 ):
+                text += b[:4].decode('utf-8', errors='strict')
+                b = b[4:]
+            else:
+                break
+
+    except UnicodeDecodeError:
+        ...
+
+    return text,b
+
+
+
 def print_sepline():
     print('-' * 80)
 
