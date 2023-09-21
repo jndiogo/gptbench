@@ -55,11 +55,8 @@ def config_run(config, sys_argv = None):
 
     if sys_argv is not None and config.init != 'resume': # save argv cmd
         cmd = ' '.join(sys_argv)
-
         text = cmd + '\n\nConfig:\n' + str(do.config)
-
         do.path_prefix_save('.ini', text)
-
 
     # train or sample
     if config.mode == 'train':

@@ -28,27 +28,29 @@ class Train(Sample):
         # train.*
         c = CfgNode()
 
-        c.start_iter_num = 0
-        c.start_eval_loss = float('inf')
-        c.start_train_loss = float('inf')
-        c.start_val_loss = float('inf')
+        c.sample_num = 0 # total trained samples
 
-        c.log_period = -0.1 # simple forward pass loss log. Negative numbers mean max(1, int(eval_period * -log_period))
+        c.eval_loss = float('inf') # last evaluation loss according to eval_type
+        c.train_loss = float('inf') # last evaluated train dataset loss
+        c.val_loss = float('inf') # last evaluated validation dataset loss
 
-        c.eval_period = 100 # each n batches we eval and check if saving model. 0 for none
+        c.log_period = -0.1 # in batch iters: simple forward pass loss log. Negative numbers mean max(1, int(eval_period * -log_period))
+
+        c.eval_period = 100 # in batch iters: each n batches we eval and check if saving model. 0 for none
         c.eval_type = 2 # how to estimate loss -> 1: on test data, 2: on val data (or test if no val dataset), 1|2=3: mean(test,val)
         c.eval_iters = 100
         c.eval_save_checkpt = 1 # 0=never, 1=on lower loss, 2=always
 
-        c.sample_period = 1000 # when to sample. 0 for never
+        c.sample_period = 1000 # in batch_iters: when to sample. 0 for never
 
         c.batch_end_callback = 'default' # 'default', None, or callback - see Train.default_batch_end_callback()
 
         return c
 
+
     @staticmethod
     def checkpoint_config_keys():
-        return ['start_iter_num', 'start_eval_loss', 'start_train_loss', 'start_val_loss', 'log_period', 'eval_period', 'eval_type', 'eval_iters', 'eval_save_checkpt', 'sample_period']
+        return ['sample_num', 'eval_loss', 'train_loss', 'val_loss', 'log_period', 'eval_period', 'eval_type', 'eval_iters', 'eval_save_checkpt', 'sample_period']
 
 
 
@@ -61,28 +63,39 @@ class Train(Sample):
 
 
 
-    def train(self,
-              over_trainer_config=None, batch_size=None, iter_num=None, 
-              over_train_config=None, batch_end_callback=None, **over_train_config_kwargs):
+    def set_train_config(self, over_train_config=None, **over_train_config_kwargs):
+        if over_train_config is not None:
+            self.config.train.merge_from_config(over_train_config)
+        # override existing keys from kwargs
+        self.config.train.merge_from_dict(over_train_config_kwargs, existing_only=True)
 
-        """ kwargs: key value of config.train settings """
+
+    def set_trainer_config(self, over_trainer_config=None, **over_trainer_config_kwargs):
+        if over_trainer_config is not None:
+            self.config.trainer.merge_from_config(over_trainer_config)
+        # override existing keys from kwargs
+        self.config.trainer.merge_from_dict(over_trainer_config_kwargs, existing_only=True)
+
+
+
+
+    def train(self, 
+              trainer_batch_size=None, 
+              iter_count=None, batch_end_callback=None, **over_train_config_kwargs):
+
+        """  """
 
 
         # trainer config ----------------------------------------------------
-        if over_trainer_config is not None:
-            self.config.trainer.merge_from_config(over_trainer_config)
-        if batch_size is not None:
-            self.config.trainer.batch_size = batch_size
-        if iter_num is not None:
-            self.config.trainer.iter_num = iter_num
+        if trainer_batch_size is not None:
+            self.config.trainer.batch_size = trainer_batch_size
 
         # train config ------------------------------------------------------
-        if over_train_config is not None:
-            self.config.train.merge_from_config(over_train_config)
         if batch_end_callback is not None:
             self.config.train.batch_end_callback = batch_end_callback
-        #override existing keys from kwargs
+        #override existing config.train keys from kwargs
         self.config.train.merge_from_dict(over_train_config_kwargs, existing_only=True)
+
 
 
         # resolve train config
@@ -111,7 +124,7 @@ class Train(Sample):
             self.trainer = Trainer(self.config.trainer, 
                                    self.train_dataset, 
                                    self.model, 
-                                   start_iter_num=train_config.start_iter_num,
+                                   start_sample_num=train_config.sample_num,
                                    optimizer=None, optimizer_state_dict=self._resumed_optimizer_state_dict)
 
             if self._resumed_optimizer_state_dict is not None:
@@ -129,20 +142,14 @@ class Train(Sample):
             if batch_end_callback == 'default':
                 batch_end_callback = Train.default_batch_end_callback
 
-            state = {'train': self, 'last_saved_loss': train_config.start_eval_loss}
+            state = {'train': self, 'last_saved_loss': train_config.eval_loss}
 
-            self.trainer.add_callback('on_batch_end', lambda trainer: batch_end_callback(trainer, state))
+            self.trainer.set_callback('on_batch_end', lambda trainer: batch_end_callback(trainer, state))
 
 
         # run the optimization
-        self.trainer.run()
+        self.trainer.run(run_iter_count=iter_count)
 
-
-        # update config
-        train_config.start_iter_num = self.trainer.iter_num
-        train_config.start_eval_loss = loss
-        train_config.start_train_loss = train_loss
-        train_config.start_val_loss = val_loss
 
 
 
@@ -153,14 +160,17 @@ class Train(Sample):
 
         """
         state = {'train': Train object, 
-                 'last_saved_loss': train_config.start_eval_loss} 
+                 'last_saved_loss': train_config.eval_loss} 
         """
 
         train_self = state['train']
         train_config = train_self.config.train
 
+        if 'first' not in state:
+            state['first'] = True
 
-        iter_num = trainer.iter_num
+        train_config.sample_num = trainer.sample_num
+        iter_num = trainer.get_iter_num()
 
         if train_config.log_period and iter_num % train_config.log_period == 0:
             train_self.log(LogFlag.BATCH_LOSS, f"iter {iter_num} | loss {trainer.last_loss:.4f} | iter_dt {trainer.iter_dt * 1000:.2f}ms")
@@ -168,7 +178,7 @@ class Train(Sample):
         # report, save model?
         if iter_num >= trainer.get_start_iter_num() + 1:
 
-            if train_config.eval_period and iter_num % train_config.eval_period == 0: # evaluate loss 
+            if train_config.eval_period and iter_num % train_config.eval_period == 0: # evaluate train/val loss 
 
                 # evaluate both the train and validation score
                 train_loss, val_loss = train_self.estimate_loss(
@@ -184,7 +194,12 @@ class Train(Sample):
 
                 val_loss = val_loss if val_loss is not None else float('inf')
 
-                train_self.log(LogFlag.EVAL_LOG, f"iter {iter_num} ({trainer.epoch_from_iter_num():.3f} epoch) | eval loss {loss:.4f} ({train_loss:.4f}, {val_loss:.4f})")
+                # update config after evaluation
+                train_config.eval_loss = loss
+                train_config.train_loss = train_loss
+                train_config.val_loss = val_loss
+
+                train_self.log(LogFlag.EVAL_LOG, f"iter {iter_num} ({trainer.epoch_from_sample_num():.3f} epoch) | eval loss {loss:.4f} (train={train_loss:.4f}, val={val_loss:.4f})")
 
 
                 if (train_config.eval_save_checkpt == 1 and loss < state['last_saved_loss']) \
@@ -192,12 +207,15 @@ class Train(Sample):
 
                     train_self.log(LogFlag.EVAL_LOG, f"==> Saving model at loss={loss:.4f} iter={iter_num}")
 
-                    train_self.save(iter_num, loss, train_loss, val_loss)
+                    # @ATTN: trainer.sample_num is already the sample num of next batch, which is okay
+                    train_self.save_checkpoint()
 
                     state['last_saved_loss'] = loss
 
 
-                train_self.log(LogFlag.CUDA_MEMORY, cuda_max_memory())
+                if state['first']:
+                    state['first'] = False
+                    train_self.log(LogFlag.CUDA_MEMORY, cuda_max_memory())
 
 
             if train_config.sample_period and iter_num % train_config.sample_period == 0:
@@ -212,24 +230,17 @@ class Train(Sample):
 
 
    # -----------------------------------------------------------------------------
-    def save(self, start_iter_num, 
-             start_eval_loss, start_train_loss, start_val_loss):
+    def save_checkpoint(self):
 
         from .sample import Sample
 
         self._ensure_work_dir()
 
-        dup_train_config = copy.copy(self.config.train)
-        dup_train_config.start_iter_num = start_iter_num
-        dup_train_config.start_eval_loss = start_eval_loss
-        dup_train_config.start_train_loss = start_train_loss
-        dup_train_config.start_val_loss = start_val_loss
-
         checkpoint_save(self.path_prefix, 
                         self.model, self.trainer.optimizer,
 
                         self.config.sample.to_dict(False, Sample.checkpoint_config_keys()),
-                        dup_train_config.to_dict(False, Train.checkpoint_config_keys()),
+                        self.config.train.to_dict(False, Train.checkpoint_config_keys()),
 
                         self.config.model.to_dict(False, GPT.checkpoint_config_keys()), 
                         self.config.dataset.to_dict(False, dataset_checkpoint_config_keys()),

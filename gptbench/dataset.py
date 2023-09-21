@@ -124,6 +124,14 @@ class GPT2TokensDataset(Dataset):
         self.bufd_decode_list = [] # partial utf-8 undecoded byte list
 
 
+    def get_src_data(self): 
+        """ self.data is a list of integers 0..get_vocab_size()-1 """
+        return self.decode(self.data)
+
+    def get_vocab_items(self):
+        all_ints = range(self.get_vocab_size())
+        return self.decode( np.array([all_ints]) )
+
     def get_vocab_size(self):
         return self.vocab_size
 
@@ -158,7 +166,7 @@ class GPT2TokensDataset(Dataset):
             return enc.encode(text, allowed_special={"<|endoftext|>"})
         else:
             return text # already encoded int array
-            
+
 
     # can return incorrect utf-8 sequences, chars will be replaced with ? chars
     def decode(self, ids, errors='replace'):
@@ -170,7 +178,7 @@ class GPT2TokensDataset(Dataset):
         enc = GPT2_ENC # tiktoken.get_encoding("gpt2")
 
         if isinstance(ids,np.ndarray):
-            assert ids.ndim == 2, "Only 2d numpy arrays supported"
+            assert ids.ndim == 2, "numpy array param: only 2d arrays supported"
             str_out = False
 
         elif isinstance(ids,int):
@@ -208,7 +216,7 @@ class GPT2TokensDataset(Dataset):
         enc = GPT2_ENC # tiktoken.get_encoding("gpt2")
 
         if isinstance(ids,np.ndarray):
-            assert ids.ndim == 2, "Only 2d numpy arrays supported"
+            assert ids.ndim == 2, "numpy array param: only 2d arrays supported"
             str_out = False
 
         elif isinstance(ids,int):
@@ -303,7 +311,7 @@ class CharDataset(Dataset):
             train = CharDataset(block_size, data=data[:split_index], repeat_if_needed=repeat_if_needed, verbose=verbose)
 
             if split_index < len(data):
-                vocab_chars = train.get_vocab_chars()            
+                vocab_chars = train.get_vocab_items()            
                 val = CharDataset(block_size, data=data[split_index:], repeat_if_needed=repeat_if_needed,
                                   vocab_chars=vocab_chars, verbose=verbose)
             else:
@@ -368,9 +376,10 @@ class CharDataset(Dataset):
 
         self.block_size = block_size
 
+    def get_src_data(self):
+        return self.data
 
-
-    def get_vocab_chars(self):
+    def get_vocab_items(self):
         return list(self.stoi.keys())
 
     def get_vocab_size(self):
@@ -398,12 +407,42 @@ class CharDataset(Dataset):
         return [self.stoi[id] for id in text]
 
 
-    def decode(self, ids):        
-        return ''.join([self.itos[int(i)] for i in ids])
+    def decode(self, ids):
+
+        if isinstance(ids,np.ndarray):
+            assert ids.ndim == 2, "numpy array param: only 2d arrays supported"
+            str_out = False
+
+        elif isinstance(ids,int):
+            ids = np.array([[ids]]) # shape=(1,t)
+            str_out = True
+
+        elif isinstance(ids, list):
+            ids = np.array([ids]) # shape=(1,t)
+            str_out = True
+
+        else:
+            assert False, "Only numpy 2D arrays, int lists or int supported"
+
+        #print(ids.shape, ids)
+        b,t=ids.shape
+        out=[]
+
+        for ib in range(b):
+            row = ids[ib,:].tolist()
+            text = ''.join([self.itos[int(i)] for i in row])
+            out.append(text)
+
+        if str_out:
+            return out[0] # type str
+        else:
+            return out # type str list with len = b
+
 
     def bufd_decode(self, ids):
         """ chars are always utf-8 complete, so just use normal decode """
         return self.decode(ids)
+
 
 
     def __getitem__(self, idx):

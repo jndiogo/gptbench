@@ -22,7 +22,7 @@ class Trainer:
 
         c.batch_size = 32
 
-        c.max_iters = None # absolute maximum iterations
+        c.max_samples = None # absolute maximum samples. -n for n of epochs 
 
         c.grad_norm_clip = 1.0
 
@@ -40,11 +40,11 @@ class Trainer:
 
     @staticmethod
     def checkpoint_config_keys():
-        return ['batch_size', 'max_iters', 'opti', 'learning_rate', 'adamw_betas', 'adamw_weight_decay', 'grad_norm_clip']
+        return ['batch_size', 'max_samples', 'opti', 'learning_rate', 'adamw_betas', 'adamw_weight_decay', 'grad_norm_clip']
 
 
     def __init__(self, trainer_config, train_dataset, model, 
-                 start_iter_num = 0,
+                 start_sample_num = 0,
                  optimizer = None, optimizer_state_dict=None):
         self.config = trainer_config
 
@@ -54,8 +54,8 @@ class Trainer:
 
         self.set_optimizer(optimizer, optimizer_state_dict)
 
-        self.iter_num = self.start_iter_num = start_iter_num
-        self.run_iter_num = 0
+        self.sample_num = self.start_sample_num = start_sample_num
+        self.run_sample_num = 0
 
         self.iter_time = 0.0
         self.iter_dt = 0.0
@@ -71,12 +71,11 @@ class Trainer:
             self.optimizer.load_state_dict(optimizer_state_dict)
 
 
+    def set_callback(self, onevent: str, callback):
+        self.callbacks[onevent] = [callback]
+
     def add_callback(self, onevent: str, callback):
         self.callbacks[onevent].append(callback)
-
-    def trigger_callbacks(self, onevent: str):
-        for callback in self.callbacks.get(onevent, []):
-            callback(self)
 
     def del_callback(self, onevent: str, callback):
         if onevent in self.callbacks:
@@ -88,30 +87,50 @@ class Trainer:
         if onevent in self.callbacks:
             self.callbacks.pop(onevent)
 
+    def trigger_callbacks(self, onevent: str):
+        for callback in self.callbacks.get(onevent, []):
+            callback(self)
 
-    def epoch_from_iter_num(self):
-        return self.iter_num * self.config.batch_size / len(self.train_dataset)
+
+    def epoch_from_sample_num(self):
+        return self.sample_num / len(self.train_dataset)
 
     def batches_for_epoch(self):
         return len(self.train_dataset) / self.config.batch_size
 
 
+    # samples: 1 iter = batch_size samples
+    def get_local_sample_num(self):
+        """ local means since start_sample_num """
+        return self.sample_num - self.start_sample_num
+
+    def get_run_sample_num(self):
+        """ run means inside run(): 0..sample_count """
+        return self.run_sample_num
+
+    def get_iter_from_sample(self, sample_num):
+        return sample_num // self.config.batch_size
+
+    @staticmethod
+    def iter_from_sample(sample_num, batch_size):
+        return sample_num // batch_size
 
 
-    # batch iterations
-    def get_start_iter_num(self):
-        return self.start_iter_num
+    # batch iterations: always integer
+    def get_start_iter_num(self): # 0-based
+        return self.get_iter_from_sample(self.start_sample_num)
 
-    def get_local_iter_num(self):
-        """ local means since start_iter_num """
-        return self.iter_num - self.start_iter_num
+    def get_iter_num(self): # 0-based
+        return self.get_iter_from_sample(self.sample_num)
 
     def get_run_iter_num(self):
         """ run means inside run(): 0..iter_count """
+        return self.get_iter_from_sample(self.run_sample_num)
 
 
 
-    def run(self, iter_count=None):
+    def run(self, 
+            run_sample_count=None, run_iter_count=None):
 
         assert self.optimizer is not None, "Optimizer must already be setup"
 
@@ -132,7 +151,16 @@ class Trainer:
         data_iter = iter(train_loader)
 
 
-        self.run_iter_num = 0
+        if self.config.max_samples is not None:
+            if self.config.max_samples < 0:
+                max_samples = -self.config.max_samples * len(self.train_dataset)
+            else:
+                max_samples = self.config.max_samples
+        else:
+            max_samples = None
+
+
+        self.run_sample_num = 0
         self.last_loss = float('inf')
         self.iter_time = time.time()
         
@@ -167,17 +195,18 @@ class Trainer:
             if not model.training: # callbacks may have moved to eval mode:
                 model.train()             
 
-            self.iter_num += 1
-            self.run_iter_num += 1
+            self.sample_num += self.config.batch_size
+            self.run_sample_num += self.config.batch_size
 
             tnow = time.time()
             self.iter_dt = tnow - self.iter_time
             self.iter_time = tnow
 
             # termination conditions
-            if iter_count is not None and self.run_iter_num >= iter_count:
+            if run_sample_count is not None and self.run_sample_count >= run_sample_count:
                 break
-
-            if config.max_iters is not None and self.iter_num >= config.max_iters:
+            if run_iter_count is not None and self.get_run_iter_num() >= run_iter_count:
+                break
+            if max_samples is not None and self.sample_num >= max_samples:
                 break
 

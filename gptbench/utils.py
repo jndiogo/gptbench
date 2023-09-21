@@ -202,7 +202,8 @@ class CfgNode:
         else:
             return default_value
 
-    def set(self, name, value):
+    def _set(self, name,value):
+
         keys = name.split('.')
         obj = self
         for k in keys[:-1]:
@@ -213,6 +214,16 @@ class CfgNode:
         leaf_name = keys[-1]
         setattr(obj, leaf_name, value)
         return True
+
+
+    def set(self, *args, **kwargs):
+
+        if len(args) == 2:
+            return self._set(*args)
+        else: # local name=value
+            for name,value in kwargs.items():
+                self._set(name,value)
+            return True # can't fail
 
     def set_if_unset(self, name, value):
         """ 1: set, 0: alreay set, -1: unable to set (bad path) """
@@ -243,7 +254,7 @@ class CfgNode:
 
         for k,v in d.items():
             if not existing_only or self.has(k):
-                self.set(k,v)
+                self._set(k,v)
 
 
 

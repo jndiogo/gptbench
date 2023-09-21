@@ -6,7 +6,6 @@ __pycache__/
 *.egg-info
 
 projects/data/*
-!projects/data/*.py
 
-out/
+checkpoints/
 
