@@ -29,15 +29,17 @@ class Sample:
         # sample.*
         c = CfgNode()
 
-        c.count = 1 # number of generations
         c.max_len = 100 # max generated token count
         
-        c.start_text = None # None: use random vocabulary item on each sampling. Or str with starting text
-        c.start_after = None # when sampling, only emit after this text has been seen
-        c.stop_before = None # when sampling, stop before emitting this. WIth per_token=1 onçy works for single chars
-        c.emit_start = 1 # on sampling, emit start_text? Only if start_after is None
+        c.count = 1 # how many times to generate from the same start_text
 
-        c.per_token = 1 # display each token immediately
+        c.start_text = None # None: use random vocabulary item on each sampling. A str with starting text. If separated with start_text_sep multiple star_text are used (count is set to 1)
+        c.start_after = None # when sampling, only emit after this text has been seen
+        c.stop_before = None # when sampling, stop before emitting this. With flush=1 only works for single chars
+        c.emit_start = 1 # on sampling, emit start_text? Only if start_after is None
+        c.start_text_sep = '|' # when used in start_text, this char separates multiple start strings
+
+        c.flush = 1 # display each token immediately
         c.eot_stop = 0 # 0 don't stop, -1 stop before, 1 stop after (and display it)
 
         c.top = 0 # top_k/top_p  0: off,  ]0..1]: top_p,  [-1..0[: top_k(vocab_size * -top),  >=1: top_k(int(n))
@@ -49,7 +51,7 @@ class Sample:
 
     @staticmethod
     def checkpoint_config_keys():
-        return ['count', 'max_len', 'start_text', 'start_after', 'stop_before', 'emit_start', 'per_token', 'eot_stop', 'top', 'temp', 'multiline_prompt']
+        return ['count', 'max_len', 'start_text', 'start_after', 'stop_before', 'emit_start', 'start_text_sep', 'flush', 'eot_stop', 'top', 'temp', 'multiline_prompt']
 
 
 
@@ -99,7 +101,7 @@ class Sample:
         self._check_pretrained_type(init_type)
         self._init(init_type, over_config)
 
-    def resume(self, over_config):
+    def init_resume(self, over_config):
         self._init('resume', over_config)
 
 
@@ -267,7 +269,7 @@ class Sample:
         if start_text is None or not dataset.is_text_valid(start_text):
             new_start_text = dataset.get_random_vocab_item()
             if start_text is not None and warn:
-                print(f"Text '{start_text}' includes tokens/chars not available in the dataset. Using random '{new_start_text}' instead")
+                self.log(LogFlag.SAMPLE, f"Text '{start_text}' includes tokens/chars not available in the dataset. Using random '{new_start_text}' instead")
             start_text = new_start_text
 
         return start_text
@@ -307,7 +309,10 @@ class Sample:
 
 
     @torch.no_grad()
-    def sample(self, stop_asap=None, **over_sample_config_kwargs):
+    def sample(self, start_text, 
+               dest='print',
+               stop_asap=None, 
+               **over_sample_config_kwargs):
 
         """
         stop_asap=[False] - when set to True, sample will stop and return.
@@ -317,21 +322,33 @@ class Sample:
 
         """
 
+        # save sample config so that any overrides are local here
+        saved_sample_config = copy.copy(self.config.sample)
+
+        sep = self.config.sample.start_text_sep
+
+        if isinstance(start_text,list):
+            sep.join(start_text)
+
         # override existing config.sample keys from kwargs
         self.config.sample.merge_from_dict(over_sample_config_kwargs, existing_only=True)
 
-
         sample_config = self.config.sample
 
-        start_text = self._get_valid_start_text(sample_config.start_text, self.train_dataset, True)
+        
+        if sep in start_text: # list of start texts
+            start_text = start_text.split(sep)
 
-        count = sample_config.count
-        if sample_config.per_token:
-            count = 1
+            for i,text in enumerate(start_text):
+                start_text[i] = self._get_valid_start_text(text, self.train_dataset, True)
+        else:
+            start_text = self._get_valid_start_text(start_text, self.train_dataset, True)
+
+
 
         def print_callback(strlist, islast):
 
-            if sample_config.per_token: # use the first line only
+            if sample_config.flush: # use the first line only
                 if len(strlist[0]):
                     print(strlist[0], sep='', end='', flush=True)
                 if islast:
@@ -342,19 +359,61 @@ class Sample:
                     if c: print_sepline()
                     print(strlist[c])
 
-        self.sample_callback(print_callback,
-                             count, sample_config.max_len, 
 
-                             start_text, 
-                             start_after=sample_config.start_after,
-                             stop_before=sample_config.stop_before,
-                             emit_start=sample_config.emit_start,
+        def list_callback(strlist, islast):
+            nonlocal dest
 
-                             eot_stop=sample_config.eot_stop, per_token=sample_config.per_token,
-                             temp=sample_config.temp, top=sample_config.top,                              
-                             
-                             stop_asap=stop_asap)
+            dest += strlist
 
+
+        callback = list_callback if isinstance(dest, list) else print_callback
+
+        if isinstance(start_text,list):
+            # multiple start_text: no flush nor multiple count
+            sample_config.count = 1
+            sample_config.flush = 0
+
+            for i,text in enumerate(start_text):
+                if not isinstance(dest, list) and i: print_sepline()
+
+                self.sample_callback(callback,
+                                     sample_config.count, sample_config.max_len, 
+
+                                     text, 
+                                     start_after=sample_config.start_after,
+                                     stop_before=sample_config.stop_before,
+                                     emit_start=sample_config.emit_start,
+
+                                     eot_stop=sample_config.eot_stop, flush=sample_config.flush,
+                                     temp=sample_config.temp, top=sample_config.top,                              
+                                     
+                                     stop_asap=stop_asap)
+
+        else:
+
+            if sample_config.count > 1 or isinstance(dest, list):
+                # count > 1: no flush (or big confusion)
+                sample_config.flush = 0
+
+            self.sample_callback(callback,
+                                 sample_config.count, sample_config.max_len, 
+
+                                 start_text, 
+                                 start_after=sample_config.start_after,
+                                 stop_before=sample_config.stop_before,
+                                 emit_start=sample_config.emit_start,
+
+                                 eot_stop=sample_config.eot_stop, flush=sample_config.flush,
+                                 temp=sample_config.temp, top=sample_config.top,                              
+                                 
+                                 stop_asap=stop_asap)
+
+
+
+
+
+        # restore saved config
+        self.config.sample = saved_sample_config
 
 
 
@@ -370,7 +429,7 @@ class Sample:
                         stop_before=None,
                         emit_start=1,
 
-                        eot_stop=0, per_token=True,
+                        eot_stop=0, flush=True,
 
                         temp=1.0, top=0.0,
                         
@@ -383,13 +442,12 @@ class Sample:
         """
         DEB = False
 
-        # don't limit: if per_token: count = 1
+        # don't limit: if flush: count = 1
 
         if DEB: print(emit_start, start_after, stop_before)
 
         eot_token = self.train_dataset.get_eot_token()
 
-        # parallel emitting along batch dim count
         chars_buffer = [start_text if emit_start else ''] * count
         emitting = [start_after is None] * count 
         emitted = [False] * count # any emission before?
@@ -465,7 +523,7 @@ class Sample:
 
             if DEB: print("post", chars_buffer, new_chars_list, emitted[0], emitting[0])
 
-            if per_token:
+            if flush:
                 chars_callback(new_chars_list, islast=islast)
 
 
@@ -478,7 +536,6 @@ class Sample:
 
         ix = self.train_dataset.encode(start_text)
         x = torch.tensor(ix, dtype=torch.long).to(self.model.device)
-
         x = x.repeat([count, 1])
 
         y = self.model.generate(x, max_len, temperature=temp, do_sample=True, top=top, 
@@ -486,7 +543,7 @@ class Sample:
                                 stop_asap=stop_asap)
 
 
-        if (not per_token) and not (stop_asap is not None and stop_asap[0]): # emit buffered - but not if stop_asap
+        if (not flush) and not (stop_asap is not None and stop_asap[0]): # emit buffered - but not if stop_asap
             chars_callback(chars_buffer, islast=True)
 
 
@@ -517,7 +574,7 @@ class Sample:
         'count',
         'max_len',
 
-        'per_token',
+        'flush',
         'eot_stop',
         'top',
         'temp',
@@ -528,12 +585,16 @@ class Sample:
         print("Prompt mode: press Enter (single line mode), or Ctrl+D / Ctrl+Z (multiline mode) to submit starting text. Enter -help for available commands.")
 
 
+        # save sample config so that any overrides are local to this function
+        saved_sample_config = copy.copy(self.config.sample)
+
+
         # override existing config.sample keys from kwargs
         self.config.sample.merge_from_dict(over_sample_config_kwargs, existing_only=True)
 
 
         sample_config = self.config.sample
-        sample_config.per_token = 1 #  this is setting global config
+        sample_config.flush = 1 #  this is setting global config
 
 
         stop_asap = [False]
@@ -625,7 +686,8 @@ class Sample:
 
 
 
-
+        # restore saved config
+        self.config.sample = saved_sample_config
 
 
 

@@ -85,6 +85,9 @@ class Train(Sample):
 
         """  """
 
+        # save train config so that any overrides are local to this function
+        saved_train_config = copy.copy(self.config.train)
+
 
         # trainer config ----------------------------------------------------
         if trainer_batch_size is not None:
@@ -150,7 +153,8 @@ class Train(Sample):
         # run the optimization
         self.trainer.run(run_iter_count=iter_count)
 
-
+        # restore saved config
+        self.config.train = saved_train_config
 
 
 

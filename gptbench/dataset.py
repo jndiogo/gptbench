@@ -327,7 +327,7 @@ class CharDataset(Dataset):
         assert (data is not None) ^ (data_path is not None), "Dataset does not support dummy data: one of data and data_path must be given"
 
         if data_path is not None:
-            with open(data_path, 'r', newline=None) as f: # newlines converted to \n
+            with open(data_path, 'r', encoding='utf-8', newline=None) as f: # newlines converted to \n
                 data = f.read()
 
         if data is None: # dummy dataset with size 1 and first token repeated

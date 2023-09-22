@@ -18,14 +18,13 @@ How config works:
 
 1) User code sets values on a config object got from empty_config().
 
-2) Any command line args are merged into this config with merge_config_from_sysargv() or when calling config_run().
+2) Any command line args are merged into this config when calling config_run(), or by using merge_config_from_sysargv().
 
-3) When needed (init, resumed, etc), a full default config is created inside GPT Bench.
+3) When initializing (init_new(), init_pretrained(), init_resume(), this config is passed and overrides defaults.
 
-4) If resuming or launching a pretrained model, the full default config is overriden as needed.
+A call to init_new(), init_pretrained(), init_resume() sets the initial config. 
 
-5) Finally, the user config from 1 and 2) overrides options from the full default config. This is the resolved config which will be used.
-
+Later calls to sample() or train() can include parameters that will set config options, but these are local to the function - the global config is the same when returning.
 
 """
 
@@ -210,6 +209,8 @@ class LogFlag(IntFlag):
 
     INIT = 1
 
+    SAMPLE = 2
+
     BATCH_DOT = 4
     BATCH_LOSS = 8
     EVAL_LOG = 16
@@ -217,7 +218,7 @@ class LogFlag(IntFlag):
 
     CUDA_MEMORY = 256
 
-    ALL = INIT | BATCH_DOT | BATCH_LOSS | EVAL_LOG | CUDA_MEMORY
+    ALL = INIT | SAMPLE | BATCH_DOT | BATCH_LOSS | EVAL_LOG | CUDA_MEMORY
 
 
 

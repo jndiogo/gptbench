@@ -20,6 +20,7 @@ if __name__ == '__main__':
     parser.add_argument('--sep', '-p', type=str, default='<|endoftext|>', help="separator")
     parser.add_argument('--features', '-f', type=str, default='', help="'reverse': a+b=c and c=a+b, 'commutative': a+b=b+a")
     parser.add_argument('--split', '-s', type=float, default=1., help="split name.ext into name.train.ext and name.val.ext at this ratio of total entries")
+    parser.add_argument('--zero', '-z', action='store_true', help="zero pad up to dim size")
     
     args = parser.parse_args()
 
@@ -49,13 +50,23 @@ if __name__ == '__main__':
 
                 c = a+b
 
-                dest.append( f"{a}+{b}={c}{sep}" )
+                if args.zero:
+                    fmt = '{:0' + str(dim) + 'd}'
+                    sa = fmt.format(a)
+                    sb = fmt.format(b)
+                    sc = fmt.format(c)
+                else:
+                    sa = str(a)
+                    sb = str(b)
+                    sc = str(c)
+
+                dest.append( f"{sa}+{sb}={sc}{sep}" )
 
                 if 'reverse' in args.features:
-                    dest.append( f"{c}={a}+{b}{sep}" )
+                    dest.append( f"{sc}={sa}+{sb}{sep}" )
 
                 if 'commutative' in args.features:
-                    dest.append( f"{a}+{b}={b}+{a}{sep}" )
+                    dest.append( f"{sa}+{sb}={sb}+{sa}{sep}" )
 
                 index += mult
 
