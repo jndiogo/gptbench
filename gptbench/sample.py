@@ -60,7 +60,6 @@ class Sample:
     def __init__(self, name=DEFAULT_NAME, work_dir=DEFAULT_WORK_DIR, log_mask=LogFlag.ALL):
 
         self.name = name
-        self.work_dir = work_dir
         self.log_mask = log_mask
 
         self.config = default_full_config()
@@ -71,7 +70,8 @@ class Sample:
         self.train_dataset = None
         self.val_dataset = None
 
-        self.path_prefix = os.path.join(self.work_dir, self.name)
+        self.path = os.path.join(work_dir, self.name, '').replace(os.sep, '/')
+        print("path", self.path)
 
         self._resumed_optimizer_state_dict = None
         self._can_train = False
@@ -106,7 +106,7 @@ class Sample:
 
 
     def can_resume(self):
-        return checkpoint_exists(self.path_prefix)
+        return checkpoint_exists(self.path)
 
 
 
@@ -142,7 +142,7 @@ class Sample:
             else: # load checkpoint
                 from .train import Train
 
-                self.log(LogFlag.INIT, f"Loading checkpoint from {self.path_prefix}")
+                self.log(LogFlag.INIT, f"Loading checkpoint from {self.path}")
 
                 (model_state_dict, self._resumed_optimizer_state_dict, 
 
@@ -151,7 +151,7 @@ class Sample:
 
                  model_config_dict,             
                  dataset_config_dict,
-                 trainer_config_dict) = checkpoint_load(self.path_prefix, load_optimizer_state=self._can_train)
+                 trainer_config_dict) = checkpoint_load(self.path, load_optimizer_state=self._can_train)
                 # only load optimizer state if do_train
 
                 # merge resumed configs into config
@@ -167,10 +167,6 @@ class Sample:
                 #if not os.path.isfile(config.dataset.train_path):
                 #    config.dataset.train_path = None
 
-                self.log(LogFlag.INIT, f"Checkpoint: iter_num={Trainer.iter_from_sample(self.config.train.sample_num, self.config.trainer.batch_size)}, eval loss={self.config.train.eval_loss}", 2)
-
-
-
 
             # merge over_config into config for the final resolved config
             self.config.merge_from_config(over_config)
@@ -180,6 +176,13 @@ class Sample:
 
             # ensure right vocab_size
             if init_type == 'resume':
+
+                epoch = Trainer.calc_epoch_from_sample_num(self.config.train.sample_num,
+                                                           len(self.train_dataset))
+                iter_count = Trainer.iter_from_sample(self.config.train.sample_num, 
+                                                      self.config.trainer.batch_size)
+                self.log(LogFlag.INIT, f"Checkpoint: iter_count={iter_count} ({epoch:.3f} epoch), loss train={self.config.train.train_loss:.4f} val={self.config.train.val_loss:.4f} eval->{self.config.train.eval_loss:.4f}")
+
                 assert self.config.model.vocab_size == self.train_dataset.get_vocab_size(), f"Model vocab_size ({self.config.model.vocab_size} != Dataset vocab_size ({self.train_dataset.get_vocab_size()})"
             else:
                 self.config.model.vocab_size = self.train_dataset.get_vocab_size()
@@ -239,70 +242,16 @@ class Sample:
 
 
 
-    def _load_datasets(self):
-
-        dataset_config = self.config.dataset
-        block_size = self.config.model.block_size
-
-        assert block_size is not None, "Must set config.model.block_size"
-
-        try:
-            cls = dataset_class_from_name(dataset_config.class_name)
-        except KeyError:
-            assert False, f"Unknown config value dataset.class_name '{dataset_config.class_name}'"
-
-        return cls.load_train_val_datasets(dataset_config.train_path,
-                                           dataset_config.val_path_or_train_split,
-                                       block_size,
-                                       repeat_if_needed=True,
-                                       verbose=self.log_mask & LogFlag.INIT)
-
-
-    def _ensure_work_dir(self):
-        # setup_work_dir: create the work directory if it doesn't already exist
-        os.makedirs(self.work_dir, exist_ok=True)
 
 
 
-    def _get_valid_start_text(self, start_text, dataset, warn):
-
-        if start_text is None or not dataset.is_text_valid(start_text):
-            new_start_text = dataset.get_random_vocab_item()
-            if start_text is not None and warn:
-                self.log(LogFlag.SAMPLE, f"Text '{start_text}' includes tokens/chars not available in the dataset. Using random '{new_start_text}' instead")
-            start_text = new_start_text
-
-        return start_text
-
-
-    def in_log(self, log_mask: LogFlag):
-        return bool(log_mask & self.log_mask)
-
-    def log(self, log_mask: LogFlag, *args, **kwargs):
-        if self.in_log(log_mask):
-            print(*args, **kwargs)
-
-
-
-
-
-    def _check_pretrained_type(self, type):
-        assert type in ['gpt2', 'gpt2-medium', 'gpt2-large', 'gpt2-xl'], 'init type must be one of: new, resume, gpt2, gpt2-medium, gpt2-large, gpt2-xl'
-
-
-
-    def set_sample_config(self, over_sample_config=None, **over_sample_config_kwargs):
+    def update_sample_config(self, over_sample_config=None, **over_sample_config_kwargs):
 
         #override existing keys
         if over_sample_config is not None:
             self.config.sample.merge_from_config(over_sample_config)
         # override existing keys from kwargs
         self.config.sample.merge_from_dict(over_sample_config_kwargs, existing_only=True)
-
-
-
-
-
 
 
 
@@ -335,15 +284,17 @@ class Sample:
 
         sample_config = self.config.sample
 
-        
-        if sep in start_text: # list of start texts
+        if start_text is None:
+            start_text = self._get_valid_start_text(start_text, self.train_dataset, True)
+
+        elif sep in start_text: # list of start texts
             start_text = start_text.split(sep)
 
             for i,text in enumerate(start_text):
                 start_text[i] = self._get_valid_start_text(text, self.train_dataset, True)
+
         else:
             start_text = self._get_valid_start_text(start_text, self.train_dataset, True)
-
 
 
         def print_callback(strlist, islast):
@@ -674,15 +625,16 @@ class Sample:
                 if quit:
                     break
             else:
-                p = p.replace("\\n", "\n")
-                sample_config.start_text = p
+                start_text = p.replace("\\n", "\n")
 
                 stop_asap = [False]
                 signal.signal(signal.SIGINT, signal_handler)
 
-                self.sample(over_sample_config=sample_config, stop_asap=stop_asap)
+                self.sample(start_text, over_sample_config=sample_config, stop_asap=stop_asap)
 
                 signal.signal(signal.SIGINT, original_sigint)
+
+                print()
 
 
 
@@ -694,9 +646,60 @@ class Sample:
 
 
 
-    def path_prefix_save(self, suffix_ext, text):
 
-        with open(self.path_prefix + suffix_ext, 'w', encoding='utf-8') as f:
+
+    def _load_datasets(self):
+
+        dataset_config = self.config.dataset
+        block_size = self.config.model.block_size
+
+        assert block_size is not None, "Must set config.model.block_size"
+
+        try:
+            cls = dataset_class_from_name(dataset_config.class_name)
+        except KeyError:
+            assert False, f"Unknown config value dataset.class_name '{dataset_config.class_name}'"
+
+        return cls.load_train_val_datasets(dataset_config.train_path,
+                                           dataset_config.val_path_or_train_split,
+                                       block_size,
+                                       repeat_if_needed=True,
+                                       verbose=self.log_mask & LogFlag.INIT)
+
+
+
+
+    def _get_valid_start_text(self, start_text, dataset, warn):
+
+        if start_text is None or not dataset.is_text_valid(start_text):
+            new_start_text = dataset.get_random_vocab_item()
+            if start_text is not None and warn:
+                self.log(LogFlag.SAMPLE, f"Text '{start_text}' includes tokens/chars not available in the dataset. Using random '{new_start_text}' instead")
+            start_text = new_start_text
+
+        return start_text
+
+
+
+    def _check_pretrained_type(self, type):
+        assert type in ['gpt2', 'gpt2-medium', 'gpt2-large', 'gpt2-xl'], 'init type must be one of: new, resume, gpt2, gpt2-medium, gpt2-large, gpt2-xl'
+
+
+    def ensure_path(self):
+        # setup_path: create the work directory if it doesn't already exist
+        os.makedirs(self.path, exist_ok=True)
+
+
+    def path_save(self, filename, text):
+        with open(os.path.join(self.path, filename), 'w', encoding='utf-8') as f:
             f.write(text)
+
+
+    def in_log(self, log_mask: LogFlag):
+        return bool(log_mask & self.log_mask)
+
+    def log(self, log_mask: LogFlag, *args, **kwargs):
+        if self.in_log(log_mask):
+            print(*args, **kwargs)
 
 

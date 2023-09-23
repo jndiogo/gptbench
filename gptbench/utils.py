@@ -215,14 +215,12 @@ class CfgNode:
         setattr(obj, leaf_name, value)
         return True
 
-
     def set(self, *args, **kwargs):
 
         if len(args) == 2:
             return self._set(*args)
         else: # local name=value
-            for name,value in kwargs.items():
-                self._set(name,value)
+            self.__dict__.update(kwargs)        
             return True # can't fail
 
     def set_if_unset(self, name, value):

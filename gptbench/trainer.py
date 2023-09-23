@@ -18,7 +18,7 @@ class Trainer:
         c = CfgNode()
 
         # dataloader parameters
-        c.n_workers = 4
+        c.n_workers = 0 # DataLoader workers. In Windows setting to above 0 causes iter() long delay.
 
         c.batch_size = 32
 
@@ -92,8 +92,12 @@ class Trainer:
             callback(self)
 
 
+    @staticmethod
+    def calc_epoch_from_sample_num(sample_num, train_dataset_len):
+        return sample_num / train_dataset_len
+
     def epoch_from_sample_num(self):
-        return self.sample_num / len(self.train_dataset)
+        return Trainer.calc_epoch_from_sample_num(self.sample_num, len(self.train_dataset))
 
     def batches_for_epoch(self):
         return len(self.train_dataset) / self.config.batch_size
@@ -136,21 +140,6 @@ class Trainer:
 
         model, config = self.model, self.config
 
-        # setup the dataloader
-        train_loader = DataLoader(
-            self.train_dataset,
-            sampler=torch.utils.data.RandomSampler(self.train_dataset, replacement=True, num_samples=int(1e10)),
-            shuffle=False,
-            pin_memory=True,
-            batch_size=config.batch_size,
-            num_workers=config.n_workers,
-        )
-
-        model.train()
-
-        data_iter = iter(train_loader)
-
-
         if self.config.max_samples is not None:
             if self.config.max_samples < 0:
                 max_samples = -self.config.max_samples * len(self.train_dataset)
@@ -160,16 +149,34 @@ class Trainer:
             max_samples = None
 
 
+
+        # setup the dataloader
+        train_loader = DataLoader(
+            self.train_dataset,
+            sampler=torch.utils.data.RandomSampler(self.train_dataset, replacement=True, num_samples=int(1e10)),
+            shuffle=False,
+            pin_memory=True, #@ATTN: why True?
+            batch_size=config.batch_size,
+            num_workers=config.n_workers
+        )
+
+        model.train()
+
+        # slowdown here in Windows, if num_workers > 0
+        data_iter = iter(train_loader)
+
         self.run_sample_num = 0
         self.last_loss = float('inf')
         self.iter_time = time.time()
         
         while True:
 
+
             # fetch the next batch (x, y) and re-init iterator if needed
             try:
                 batch = next(data_iter)
             except StopIteration:
+                print("---------------> StopIteration")
                 data_iter = iter(train_loader)
                 batch = next(data_iter)
 

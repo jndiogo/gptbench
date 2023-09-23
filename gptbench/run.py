@@ -25,10 +25,10 @@ def config_run(config, sys_argv = None):
     ops = {}
     if config.has('name'):
         ops['name'] = config.name
-    if config.has('log_mask'):
-        ops['log_mask'] = config.log_mask
     if config.has('work_dir'):
         ops['work_dir'] = config.work_dir
+    if config.has('log_mask'):
+        ops['log_mask'] = config.log_mask
 
 
     if config.mode == 'train':
@@ -47,16 +47,17 @@ def config_run(config, sys_argv = None):
         do.init_pretrained(config.init, config)
 
     elif config.init == 'resume':
-        do.resume(config)
+        do.init_resume(config)
 
     else:
         assert False, f"Unknown init '{config.init}'"
 
 
     if sys_argv is not None and config.init != 'resume': # save argv cmd
+        do.ensure_path()        
         cmd = ' '.join(sys_argv)
         text = cmd + '\n\nConfig:\n' + str(do.config)
-        do.path_prefix_save('.ini', text)
+        do.path_save('init.txt', text)
 
     # train or sample
     if config.mode == 'train':

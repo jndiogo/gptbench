@@ -132,13 +132,13 @@ CHECKPOINT_VERSION = 1
 def checkpoint_load(path_prefix, load_optimizer_state):
     """ """
 
-    model_state_dict = torch.load(path_prefix + ".pt")
+    model_state_dict = torch.load(path_prefix + "model.pt")
     if load_optimizer_state:
-        optimizer_state_dict = torch.load(path_prefix + ".opti")
+        optimizer_state_dict = torch.load(path_prefix + "opti.pt")
     else:
         optimizer_state_dict = None
 
-    with open(path_prefix + '.json', 'r', encoding='utf-8') as f:
+    with open(path_prefix + 'config.json', 'r', encoding='utf-8') as f:
         js = f.read()
     j = json.loads(js)
 
@@ -167,8 +167,8 @@ def checkpoint_save(path_prefix,
     signal.signal(signal.SIGINT, signal.SIG_IGN)
 
 
-    torch.save(model.state_dict(), path_prefix + ".pt")
-    torch.save(optimizer.state_dict(), path_prefix + ".opti")
+    torch.save(model.state_dict(), path_prefix + "model.pt")
+    torch.save(optimizer.state_dict(), path_prefix + "opti.pt")
 
     config_info = {'_version': CHECKPOINT_VERSION,
                    'train': train_config_dict,
@@ -181,7 +181,7 @@ def checkpoint_save(path_prefix,
 
     json_str = json.dumps(config_info, indent=4)
 
-    with open(path_prefix + '.json', 'w', encoding='utf-8') as f:
+    with open(path_prefix + 'config.json', 'w', encoding='utf-8') as f:
         f.write(json_str)
 
 
@@ -192,9 +192,9 @@ def checkpoint_save(path_prefix,
 
 def checkpoint_exists(path_prefix):
 
-    return ( os.path.isfile(path_prefix + ".pt") and 
-             os.path.isfile(path_prefix + ".opti") and 
-             os.path.isfile(path_prefix + ".json") )
+    return ( os.path.isfile(path_prefix + "model.pt") and 
+             os.path.isfile(path_prefix + "opti.pt") and 
+             os.path.isfile(path_prefix + "config.json") )
 
 
 
@@ -211,14 +211,14 @@ class LogFlag(IntFlag):
 
     SAMPLE = 2
 
-    BATCH_DOT = 4
-    BATCH_LOSS = 8
-    EVAL_LOG = 16
-    TRAIN = BATCH_DOT | BATCH_LOSS | EVAL_LOG
+    TRAIN_ITER = 4
+    TRAIN_EVAL = 8
+    TRAIN_DOT = 16
+    TRAIN = TRAIN_DOT | TRAIN_ITER | TRAIN_EVAL
 
     CUDA_MEMORY = 256
 
-    ALL = INIT | SAMPLE | BATCH_DOT | BATCH_LOSS | EVAL_LOG | CUDA_MEMORY
+    ALL = INIT | SAMPLE | TRAIN | CUDA_MEMORY
 
 
 
