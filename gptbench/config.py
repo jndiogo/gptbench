@@ -24,7 +24,15 @@ How config works:
 
 A call to init_new(), init_pretrained(), init_resume() sets the initial config. 
 
-Later calls to sample() or train() can include parameters that will set config options, but these are local to the function - the global config is the same when returning.
+Later calls to sample() or train() can include parameters that will set config settings, but these are local to the function - the global config is the same when returning.
+
+Config settings (read from command line or in python) can be set with these types of values:
+    None
+    int
+    float
+    str
+
+No booleans: use 0 or 1 instead
 
 """
 
@@ -134,7 +142,7 @@ def checkpoint_load(path_prefix, load_optimizer_state):
 
     model_state_dict = torch.load(path_prefix + "model.pt")
     if load_optimizer_state:
-        optimizer_state_dict = torch.load(path_prefix + "opti.pt")
+        optimizer_state_dict = torch.load(path_prefix + "optimizer.pt")
     else:
         optimizer_state_dict = None
 
@@ -153,7 +161,7 @@ def checkpoint_load(path_prefix, load_optimizer_state):
 
 
 def checkpoint_save(path_prefix, 
-                    model, optimizer, 
+                    model, optimizer,
 
                     sample_config_dict,
                     train_config_dict,
@@ -161,15 +169,20 @@ def checkpoint_save(path_prefix,
                     model_config_dict,
                     dataset_config_dict,
                     trainer_config_dict):
+    """
+    loss is in the form [(iter_num,train_loss[,val_loss]),...]
+    """
 
-    # no CTRL+C interruptions while saving, please (malformed checkpoint files)
+
+    # no CTRL+C interruptions while saving to avoid incomplete/corrupt checkpoint files
     original_sigint = signal.getsignal(signal.SIGINT)
     signal.signal(signal.SIGINT, signal.SIG_IGN)
 
 
     torch.save(model.state_dict(), path_prefix + "model.pt")
-    torch.save(optimizer.state_dict(), path_prefix + "opti.pt")
+    torch.save(optimizer.state_dict(), path_prefix + "optimizer.pt")
 
+    # config json
     config_info = {'_version': CHECKPOINT_VERSION,
                    'train': train_config_dict,
                    'sample': sample_config_dict,
@@ -193,10 +206,74 @@ def checkpoint_save(path_prefix,
 def checkpoint_exists(path_prefix):
 
     return ( os.path.isfile(path_prefix + "model.pt") and 
-             os.path.isfile(path_prefix + "opti.pt") and 
+             os.path.isfile(path_prefix + "optimizer.pt") and 
              os.path.isfile(path_prefix + "config.json") )
 
 
+
+
+
+LOSS_LOG_FILENAME = 'loss.csv'
+
+def loss_load(path_prefix):
+    with open(path_prefix + LOSS_LOG_FILENAME, 'r') as f:
+        lines = [line[:-1] for line in f]
+
+    out = []
+
+    for line in lines:
+        t=line.split(',')
+        out.append(t)
+
+    return out
+
+
+def loss_append(path_prefix, loss_list):
+
+    out = []
+    for t in loss_list:
+        if len(t)==3 and t[2] == float('inf'): # (iter,train,inf) -> (iter,train)
+            t = t[:-1]
+        out.append(','.join(map(str,t)))
+    loss_text = '\n'.join(out)
+
+    with open(path_prefix + LOSS_LOG_FILENAME, 'a') as f:
+        f.write(loss_text + '\n')
+
+
+
+def loss_trim(path_prefix, last_iter_num):
+
+    path = path_prefix + LOSS_LOG_FILENAME
+
+    if last_iter_num is None: # delete all
+        with open(path, 'w') as f:
+            f.write('')
+        return
+
+    try:
+        l = loss_load(path)
+    except OSError:
+        return
+
+    loss_list = []
+
+    for i in range(len(l)-1, -1, -1):
+        t = int(l[i][0])
+
+        if t <= last_iter_num: # found first <= iter_num: keep up till this one
+            loss_list = l[:i+1]
+            break
+
+    out = []
+    for t in loss_list:
+        out.append(','.join(map(str,t)))
+    loss_text = '\n'.join(out)
+
+    with open(path, 'w') as f:
+        f.write(loss_text)
+        if len(loss_text):
+            f.write('\n')
 
 
 
@@ -207,7 +284,7 @@ def checkpoint_exists(path_prefix):
 class LogFlag(IntFlag):
     NONE = 0
 
-    INIT = 1
+    INIT = 1 # init messages in init_* and in sample, train, etc.
 
     SAMPLE = 2
 

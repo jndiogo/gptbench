@@ -5,14 +5,14 @@
 import os, sys, copy, signal, json
 
 import torch
-
+from torch.utils.tensorboard import SummaryWriter
 
 from .sample import Sample, LogFlag, DEFAULT_NAME, DEFAULT_WORK_DIR
 
 from .model import GPT
 from .trainer import Trainer
 
-from .config import checkpoint_save, dataset_checkpoint_config_keys
+from .config import checkpoint_save, dataset_checkpoint_config_keys, loss_append, loss_trim
 
 from .utils import CfgNode, print_sepline, cuda_max_memory_init, cuda_max_memory
 
@@ -35,9 +35,10 @@ class Train(Sample):
         c.eval_loss = float('inf') # last evaluation loss calculated from train_loss and val_loss according to eval_type
 
         c.eval_period = 100 # in batch iters: each n batches we eval and check if saving model. 0 for none
-        c.eval_type = 2 # how to estimate loss -> 1: on test data, 2: on val data (or test if no val dataset), 1|2=3: mean(test,val)
+        c.eval_type = 1.0 # how to estimate loss -> 0: on train data, 1: on val data (or train if no val dataset), ]0,1[: weighted average of train and val (or train only if no val dataset)
         c.eval_iters = 100
-        c.eval_save_checkpt = 1 # 0=never, 1=on lower loss, 2=always
+        c.eval_save_checkpt = 1 # 0=never, 1=on new lower loss, 2=always
+        c.eval_save_loss = 'csv,tensorboard' # multiple values allowed: csv path/loss.csv, tensorboard
 
         c.sample_period = -10. # in batch_iters: when to sample. 0=never. Negative means -multiples of eval_period
 
@@ -61,6 +62,7 @@ class Train(Sample):
 
         self.trainer = None
         self._can_train = True
+        self._tensorboard_writer = None
 
 
 
@@ -86,6 +88,8 @@ class Train(Sample):
 
         """  """
 
+        self.log(LogFlag.INIT, f"Training")
+
         # save train config so that any overrides are local to this function
         saved_train_config = copy.copy(self.config.train)
 
@@ -101,14 +105,8 @@ class Train(Sample):
         self.config.train.merge_from_dict(over_train_config_kwargs, existing_only=True)
 
 
-
-        # resolve train config
-        if self.val_dataset is None: # no validations dataset?
-            self.config.train.eval_type &= 1 # clear val bit
-        if self.config.train.eval_type & 3 == 0: # force at least train
-            self.config.train.eval_type = 1
-
-        assert (self.config.train.eval_type & 3) != 0, "config.train.eval_type must be set to 1, 2 or 1|2"
+        # sanity checks
+        assert self.config.train.eval_type >= 0. and self.config.train.eval_type <= 1., "config.train.eval_type must be >= 0.0 and <= 1.0"
 
 
         # prepare state for callback
@@ -128,11 +126,11 @@ class Train(Sample):
 
         self._last_saved_eval_loss = self.config.train.eval_loss
 
-        self._first = True
 
 
         if self.in_log(LogFlag.CUDA_MEMORY):
             cuda_max_memory_init()
+
 
 
         if self.trainer is None:
@@ -151,6 +149,20 @@ class Train(Sample):
         self.log(LogFlag.INIT, f"Batches per epoch: {int(self.trainer.batches_for_epoch())}")
 
 
+        if self.config.train.eval_save_loss is not None:
+
+            if 'csv' in self.config.train.eval_save_loss:
+                iter_num = Trainer.iter_from_sample(self.config.train.sample_num, 
+                                                    self.config.trainer.batch_size)
+                # trim loss at iter_num
+                loss_trim(self.log_path, iter_num if iter_num > 0 else None)
+
+            if 'tensorboard' in self.config.train.eval_save_loss:
+                if self._tensorboard_writer:
+                    self._tensorboard_writer.close()
+                self._tensorboard_writer = SummaryWriter(log_dir=self.log_path)
+
+
 
         if self.config.train.batch_end_callback is not None:
             batch_end_callback = self.config.train.batch_end_callback
@@ -159,6 +171,9 @@ class Train(Sample):
                 batch_end_callback = Train.default_batch_end_callback
 
             self.trainer.set_callback('on_batch_end', lambda trainer: batch_end_callback(trainer, self))
+
+
+
 
 
         # run the optimization
@@ -181,14 +196,11 @@ class Train(Sample):
 
         """
         train callback state:
-            _first
             _eval_period
             _log_period
             _sample_period
 
             _last_saved_eval_loss
-
-            _first=True on first call
 
         """
 
@@ -197,11 +209,16 @@ class Train(Sample):
         train_config.sample_num = trainer.sample_num
         iter_num = trainer.get_iter_num()
 
+        first_iter = (iter_num == trainer.get_start_iter_num())
+
+
         if train._log_period and iter_num % train._log_period == 0:
             train.log(LogFlag.TRAIN_ITER, f"iter {iter_num} loss={trainer.last_loss:.4f}, iter_dt={trainer.iter_dt * 1000:.2f}ms")
 
-        # report, save model?
-        if train._eval_period and iter_num % train._eval_period == 0: # evaluate train/val loss 
+        # evaluate model? And save checkpoint, loss, etc
+        if (train._eval_period and 
+            (iter_num == 0 or not first_iter) and # don't eval on first_iter except if iter 0
+            iter_num % train._eval_period == 0): # evaluate train/val loss 
 
             # evaluate both the train and validation score
             train_loss, val_loss = train.estimate_loss(
@@ -210,17 +227,16 @@ class Train(Sample):
                 train.config.trainer.batch_size,
                 train_config.eval_iters)
 
-            if train_config.eval_type & 3 == 3:
-                eval_loss = (train_loss + val_loss) / 2.
+            if val_loss is None: # no validation dataset present
+                eval_loss = train_loss
+                val_loss = float('inf')
             else:
-                eval_loss = val_loss if (train_config.eval_type & 2) and val_loss else train_loss
-
-            val_loss = val_loss if val_loss is not None else float('inf')
+                eval_loss = train_loss * (1.-train_config.eval_type) + val_loss * train_config.eval_type            
 
             # update config after evaluation
-            train_config.eval_loss = eval_loss
             train_config.train_loss = train_loss
             train_config.val_loss = val_loss
+            train_config.eval_loss = eval_loss
 
             train.log(LogFlag.TRAIN_EVAL, f"iter {iter_num} ({trainer.epoch_from_sample_num():.3f} epoch): loss train={train_loss:.4f}, val={val_loss:.4f}, eval->{eval_loss:.4f}")
 
@@ -236,9 +252,13 @@ class Train(Sample):
                 train._last_saved_eval_loss = eval_loss
 
 
-            if train._first:
-                train._first=False
-                train.log(LogFlag.CUDA_MEMORY, cuda_max_memory())
+            if train_config.eval_save_loss is not None:
+                if 'csv' in train_config.eval_save_loss:
+                    loss_append(train.log_path, [(iter_num, train_loss, val_loss)] )
+
+                if 'tensorboard' in train_config.eval_save_loss:
+                    train._tensorboard_writer.add_scalar('Loss/train', train_loss, iter_num)
+                    train._tensorboard_writer.add_scalar('Loss/val', val_loss, iter_num)
 
 
             if train._sample_period and iter_num % train._sample_period == 0:
@@ -247,6 +267,10 @@ class Train(Sample):
 
 
         train.log(LogFlag.TRAIN_DOT, '.', end='', flush=True)
+
+        if first_iter:
+            train.log(LogFlag.CUDA_MEMORY, cuda_max_memory())
+
 
 
 

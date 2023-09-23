@@ -19,7 +19,8 @@ from .utils import CfgNode, print_sepline, set_seed
 
 # -----------------------------------------------------------------------------
 DEFAULT_NAME = 'model'
-DEFAULT_WORK_DIR = './checkpoints'
+DEFAULT_WORK_DIR = './models'
+LOG_DIR = 'logs'
 
 class Sample:
 
@@ -71,7 +72,7 @@ class Sample:
         self.val_dataset = None
 
         self.path = os.path.join(work_dir, self.name, '').replace(os.sep, '/')
-        print("path", self.path)
+        self.log_path = os.path.join(self.path, LOG_DIR, '').replace(os.sep, '/')
 
         self._resumed_optimizer_state_dict = None
         self._can_train = False
@@ -179,13 +180,15 @@ class Sample:
 
                 epoch = Trainer.calc_epoch_from_sample_num(self.config.train.sample_num,
                                                            len(self.train_dataset))
-                iter_count = Trainer.iter_from_sample(self.config.train.sample_num, 
-                                                      self.config.trainer.batch_size)
-                self.log(LogFlag.INIT, f"Checkpoint: iter_count={iter_count} ({epoch:.3f} epoch), loss train={self.config.train.train_loss:.4f} val={self.config.train.val_loss:.4f} eval->{self.config.train.eval_loss:.4f}")
+                iter_num = Trainer.iter_from_sample(self.config.train.sample_num, 
+                                                    self.config.trainer.batch_size)
+                self.log(LogFlag.INIT, f"Checkpoint: num={iter_num} ({epoch:.3f} epoch), loss train={self.config.train.train_loss:.4f} val={self.config.train.val_loss:.4f} eval->{self.config.train.eval_loss:.4f}")
 
                 assert self.config.model.vocab_size == self.train_dataset.get_vocab_size(), f"Model vocab_size ({self.config.model.vocab_size} != Dataset vocab_size ({self.train_dataset.get_vocab_size()})"
+
             else:
                 self.config.model.vocab_size = self.train_dataset.get_vocab_size()
+
 
             self.model = GPT(self.config.model)
 
@@ -687,7 +690,8 @@ class Sample:
 
     def ensure_path(self):
         # setup_path: create the work directory if it doesn't already exist
-        os.makedirs(self.path, exist_ok=True)
+        #os.makedirs(self.path, exist_ok=True)
+        os.makedirs(self.path + LOG_DIR, exist_ok=True)
 
 
     def path_save(self, filename, text):
