@@ -7,13 +7,12 @@ import os, sys, copy, signal, json
 import torch
 import numpy as np
 
-from .dataset import dataset_class_from_name, DATASET_CLASS_MAP
 from .model import GPT
 from .trainer import Trainer
 
-from .config import empty_config, default_full_config, LogFlag, checkpoint_load, checkpoint_exists, dataset_get_default_config, dataset_checkpoint_config_keys
+from .config import empty_config, default_full_config, LogFlag, checkpoint_load, checkpoint_exists, dataset_get_default_config, dataset_checkpoint_config_keys, dataset_class_from_name, DATASET_CLASS_MAP
 
-from .utils import CfgNode, print_sepline, set_seed
+from .utils import CfgNode, print_sepline, set_seed, dict_from_str
 
 
 
@@ -80,10 +79,14 @@ class Sample:
 
 
 
-    def set_datasets(self, class_name, train_path, val_path=None, train_split=None):
+    def set_datasets(self, class_name, 
+                     train_path, val_path=None, train_split=None,
+                     params_str=None,
+                     **params_kwargs):
 
         assert class_name in DATASET_CLASS_MAP, f"Unknown dataset class '{class_name}'"
         assert (val_path is None) or (train_split is None), "Can't set both val_path and train_split"
+        assert (params_str is not None) ^ bool(len(params_kwargs)), "Only params_str or kwargs can be given"
 
         self.config.dataset.class_name = class_name
         self.config.dataset.train_path = train_path
@@ -92,6 +95,18 @@ class Sample:
             self.config.dataset.val_path_or_train_split = str(val_path)
         if train_split is not None:
             self.config.dataset.val_path_or_train_split = float(train_split)
+
+        params=''
+        if len(params_kwargs):
+            for k,v in params_kwargs.items():
+                if len(params): 
+                    params = ',' + params
+                params += k + '=' + str(v).replace(',' , '\,')
+        elif params_str is not None:
+            params = params_str
+
+        if len(params):
+            self.config.dataset.params = params
 
 
 
@@ -663,11 +678,19 @@ class Sample:
         except KeyError:
             assert False, f"Unknown config value dataset.class_name '{dataset_config.class_name}'"
 
+        # extra params?
+        if dataset_config.params is not None:
+            params = dataset_config.params.replace('\\n', '\n')
+            kwargs = dict_from_str(params)
+        else:
+            kwargs = {}
+
         return cls.load_train_val_datasets(dataset_config.train_path,
                                            dataset_config.val_path_or_train_split,
-                                       block_size,
-                                       repeat_if_needed=True,
-                                       verbose=self.log_mask & LogFlag.INIT)
+                                           block_size,
+                                           repeat_if_needed=True,
+                                           verbose=self.log_mask & LogFlag.INIT,
+                                           **kwargs)
 
 
 

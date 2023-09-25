@@ -378,6 +378,32 @@ def consumme_decode_utf8(b):
 
 
 
+
+def dict_from_str(st):
+    """
+    Convert a string in the form "name=value,name=value,..." into a dict.
+    Escape any commas in value to \,.
+    """
+
+    st = st.replace('\,', '\0')
+    st = st.replace('\\n,', '\n')
+    args = st.split(',')
+
+    out={}
+
+    for arg in args:
+        keyval = arg.split('=')
+        if len(keyval) >= 2:
+            key = keyval[0]
+            val = '='.join(keyval[1:]) # andle values containing '=' chars
+            out[key] = val.replace('\0', ',') # previous \, -> ,
+        # ignore entries not in key=value format
+
+    return out
+
+
+
+
 def print_sepline():
     print('-' * 80)
 

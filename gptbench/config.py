@@ -7,6 +7,8 @@ from enum import IntFlag
 
 import torch
 
+from .tokendataset import GPT2TokensDataset
+from .chardataset import CharDataset, PaddedLineCharDataset
 
 from .utils import CfgNode
 
@@ -100,14 +102,24 @@ def dataset_get_default_config():
     c = CfgNode()
 
     c.class_name = None
+    
     c.train_path = None
     c.val_path_or_train_split = 0.9 # 0..1 float: train_split for validation dataset from train dataset, str: validation dataset path
 
+    c.params = None # a string in the form "name=vale,name=value,..." with extra parameters for dataset creation
+
     return c
+
 
 def dataset_checkpoint_config_keys():
     return ['class_name', 'train_path', 'val_path_or_train_split']
 
+
+
+DATASET_CLASS_MAP = {'gpt2': GPT2TokensDataset, 'char': CharDataset, 'padlinechar': PaddedLineCharDataset}
+
+def dataset_class_from_name(class_name):
+    return DATASET_CLASS_MAP[class_name]
 
 
 
