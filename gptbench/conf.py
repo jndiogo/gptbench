@@ -44,11 +44,11 @@ class Conf():
     
             
     
-    def update(self, *args, key_must_exist=True, filter_key_list=None, **kwargs):
+    def update(self, *args, accept_keys=None, reject_keys=None, **kwargs):
         """
+        Update from dict or Conf.
         Nested Conf items are only updated if they exist here.
-        key_must_exist: only local existing keys are updated.
-        filter_key_list: only update path/keys which are in this list 
+        accept_keys/reject_keys: only update/skip first level keys which are in this list 
         """
 
         if LOG: print(args, kwargs)
@@ -56,22 +56,21 @@ class Conf():
         for k,v in dict(*args, **kwargs).items():
             if LOG: print(k,v)
 
-            if filter_key_list is not None:
-                if k not in filter_key_list:
+            if accept_keys is not None:
+                if k not in accept_keys:
+                    continue
+            if reject_keys is not None:
+                if k in reject_keys:
                     continue
 
             obj, leaf_name = self._obj_leaf_name_from_path(k)
 
-            if key_must_exist:
-                assert leaf_name in obj, f"Destination key path '{k}' does not exist"
-
             if LOG: print("obj,leaf_name", obj,leaf_name)
 
-            if isinstance(v, type(self)):
-                assert leaf_name in obj, f"Key path '{k}' of type Conf must exist to be updated"
-                assert isinstance(obj[leaf_name], type(self)), "Atempting to update Conf into a different type"
-                    
-                obj[leaf_name].update(v.items(), key_must_exist=key_must_exist)
+            assert leaf_name in obj, f"Destination key path '{k}' does not exist"
+
+            if isinstance(obj[leaf_name], type(self)):
+                obj[leaf_name].update(v.items())
             else:
                 obj._local_set(leaf_name,v)
             
@@ -112,7 +111,19 @@ class Conf():
 
             d[key]=val
 
-        self.update(d, key_must_exist=key_must_exist)
+        #self.update(d, key_must_exist=key_must_exist)
+        for k,v in d.items():
+
+            obj, leaf_name = self._obj_leaf_name_from_path(k)
+
+            if key_must_exist:
+                assert leaf_name in obj, f"Destination key path '{k}' does not exist"
+
+            if leaf_name in obj and isinstance(obj[leaf_name], type(self)):
+                obj[leaf_name].update(v.items())
+            else:
+                obj._local_set(leaf_name,v)
+
 
     
     def to_dict(self, include_non_jsonable=True, filter_key_list=None):

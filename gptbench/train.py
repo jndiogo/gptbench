@@ -29,16 +29,6 @@ class Train(Sample):
         # train.*
         c = Conf()
 
-        # these are not config settings but stored counts/best loss information'
-        c.setup('sample_num', 0, int, 'The number of trained samples so far')
-
-        c.setup('train_loss', float('inf'), float, 'Last evaluated train dataset loss')
-
-        c.setup('val_loss', float('inf'), float, 'Last evaluated validation dataset loss')
-
-        c.setup('eval_loss', float('inf'), float, 'Last evaluation loss calculated from train_loss and val_loss according to eval_type')
-
-
         c.setup('eval_period', 100, int, 'In batch iterations: each n batches we eval and check if saving model. 0 for none')
 
         c.setup('eval_type', 1.0, float, 'How to estimate loss -> 0: on train data, 1: on val data (or train if no val dataset), ]0,1[: weighted average of train and val (or train only if no val dataset')
@@ -125,7 +115,7 @@ class Train(Sample):
         else:
             self._sample_period = self.config.train.sample_period
 
-        self._last_saved_eval_loss = self.config.train.eval_loss
+        self._last_saved_eval_loss = self.state['eval_loss']
 
 
 
@@ -139,7 +129,7 @@ class Train(Sample):
             self.trainer = Trainer(self.config.trainer, 
                                    self.train_dataset, 
                                    self.model, 
-                                   start_sample_num=self.config.train.sample_num,
+                                   start_sample_num=self.state['n_samples'],
                                    optimizer=None, optimizer_state_dict=self._resumed_optimizer_state_dict)
 
             if self._resumed_optimizer_state_dict is not None:
@@ -153,7 +143,7 @@ class Train(Sample):
         if self.config.train.eval_save_loss is not None:
 
             if 'csv' in self.config.train.eval_save_loss:
-                iter_num = Trainer.iter_from_sample(self.config.train.sample_num, 
+                iter_num = Trainer.iter_from_sample(self.state['n_samples'], 
                                                     self.config.trainer.batch_size)
                 # trim loss at iter_num
                 loss_trim(self.log_path, iter_num if iter_num > 0 else None)
@@ -171,15 +161,9 @@ class Train(Sample):
 
 
 
-
         # run the optimization
         self.trainer.run(run_iter_count=iter_count)
 
-        # restore saved config: but update new values for sample_num, and 3 losses
-        saved_train_config.sample_num = self.config.train.sample_num
-        saved_train_config.train_loss = self.config.train.train_loss
-        saved_train_config.val_loss = self.config.train.val_loss
-        saved_train_config.eval_loss = self.config.train.eval_loss
 
         self.config.train = saved_train_config
 
@@ -192,17 +176,17 @@ class Train(Sample):
 
         """
         train callback state:
+            state
+
             _eval_period
             _log_period
             _sample_period
-
             _last_saved_eval_loss
-
         """
 
         train_config = train.config.train
 
-        train_config.sample_num = trainer.sample_num
+        train.state['n_samples'] = trainer.sample_num
         iter_num = trainer.get_iter_num()
 
         first_iter = (iter_num == trainer.get_start_iter_num())
@@ -230,9 +214,9 @@ class Train(Sample):
                 eval_loss = train_loss * (1. - train_config.eval_type) + val_loss * train_config.eval_type            
 
             # update config after evaluation
-            train_config.train_loss = train_loss
-            train_config.val_loss = val_loss
-            train_config.eval_loss = eval_loss
+            train.state['train_loss'] = train_loss
+            train.state['val_loss'] = val_loss
+            train.state['eval_loss'] = eval_loss
 
             train.log(LogFlag.TRAIN_EVAL, f"iter {iter_num} ({trainer.epoch_from_sample_num():.3f} epoch): loss train={train_loss:.4f}, val={val_loss:.4f}, eval->{eval_loss:.4f}")
 
@@ -279,15 +263,14 @@ class Train(Sample):
 
         self.ensure_path()
 
+        config = self.config.to_dict()
+        # don't include seed
+        del config['seed']
+
         checkpoint_save(self.path, 
                         self.model, self.trainer.optimizer,
-
-                        self.config.sample.to_dict(include_non_jsonable=False),
-                        self.config.train.to_dict(include_non_jsonable=False),
-
-                        self.config.model.to_dict(include_non_jsonable=False),
-                        self.config.dataset.to_dict(include_non_jsonable=False),
-                        self.config.trainer.to_dict(include_non_jsonable=False)
+                        self.state,
+                        config
                         )
 
 

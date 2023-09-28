@@ -99,7 +99,7 @@ def full_default_config():
 
 # -----------------------------------------------------------------------------
 def dataset_get_default_config():
-    
+
     c = Conf()
 
     c.setup('class_name', None, str, 'Dataset type id: ' + ','.join(DATASET_CLASS_MAP.keys()))
@@ -147,7 +147,7 @@ def merge_config_from_sysargv(sys_argv, base_config=None):
 # -----------------------------------------------------------------------------
 CHECKPOINT_VERSION = 1
 
-def checkpoint_load(path_prefix, load_optimizer_state):
+def checkpoint_load(path_prefix, load_optimizer_state:bool):
     """ """
 
     model_state_dict = torch.load(path_prefix + "model.pt")
@@ -156,33 +156,16 @@ def checkpoint_load(path_prefix, load_optimizer_state):
     else:
         optimizer_state_dict = None
 
-    with open(path_prefix + 'config.json', 'r', encoding='utf-8') as f:
+    with open(path_prefix + 'state.json', 'r', encoding='utf-8') as f:
         js = f.read()
     j = json.loads(js)
 
-    return (model_state_dict, optimizer_state_dict,
-            j['sample'],
-            j['train'],
-
-            j['model'],
-            j['dataset'],
-            j['trainer'] )
+    return (model_state_dict, optimizer_state_dict, j['state'], j['config'])
 
 
 
 def checkpoint_save(path_prefix, 
-                    model, optimizer,
-
-                    sample_config_dict,
-                    train_config_dict,
-
-                    model_config_dict,
-                    dataset_config_dict,
-                    trainer_config_dict):
-    """
-    loss is in the form [(iter_num,train_loss[,val_loss]),...]
-    """
-
+                    model, optimizer, state_dict, config_dict):
 
     # no CTRL+C interruptions while saving to avoid incomplete/corrupt checkpoint files
     original_sigint = signal.getsignal(signal.SIGINT)
@@ -193,18 +176,13 @@ def checkpoint_save(path_prefix,
     torch.save(optimizer.state_dict(), path_prefix + "optimizer.pt")
 
     # config json
-    config_info = {'_version': CHECKPOINT_VERSION,
-                   'train': train_config_dict,
-                   'sample': sample_config_dict,
+    d = {'state': state_dict,
+         'config': config_dict,
+         '_version': CHECKPOINT_VERSION}
 
-                   'model': model_config_dict,
-                   'dataset': dataset_config_dict,
-                   'trainer': trainer_config_dict
-                   }
+    json_str = json.dumps(d, indent=2)
 
-    json_str = json.dumps(config_info, indent=4)
-
-    with open(path_prefix + 'config.json', 'w', encoding='utf-8') as f:
+    with open(path_prefix + 'state.json', 'w', encoding='utf-8') as f:
         f.write(json_str)
 
 
@@ -217,7 +195,7 @@ def checkpoint_save(path_prefix,
 def checkpoint_exists(path_prefix):
     return ( os.path.isfile(path_prefix + "model.pt") and 
              os.path.isfile(path_prefix + "optimizer.pt") and 
-             os.path.isfile(path_prefix + "config.json") )
+             os.path.isfile(path_prefix + "state.json") )
 
 
 

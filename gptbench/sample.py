@@ -66,10 +66,12 @@ class Sample:
 
         self.config = full_default_config()
 
-        self.state = { 'n_samples': 0, 
-                       'train_loss': float('inf'), 
-                       'val_loss': float('inf'), 
-                       'eval_loss': float('inf') }
+        self.state = { 'n_samples': 0, # number of trained samples so far
+                       'train_loss': float('inf'), # last evaluated train dataset loss 
+                       'val_loss': float('inf'), # last evaluated validation dataset loss
+                       'eval_loss': float('inf') # last evaluation loss calculated from train_loss and val_loss according to eval_type
+                       }
+
 
         self.model = None
         self.trainer = None
@@ -169,22 +171,14 @@ class Sample:
                 self.log(LogFlag.INIT, f"Loading checkpoint from {self.path}")
 
                 (model_state_dict, self._resumed_optimizer_state_dict, 
-
-                 sample_config_dict,
-                 train_config_dict,
-
-                 model_config_dict,             
-                 dataset_config_dict,
-                 trainer_config_dict) = checkpoint_load(self.path, load_optimizer_state=self._can_train)
+                 state_dict,
+                 config_dict) = checkpoint_load(self.path, load_optimizer_state=self._can_train)
                 # only load optimizer state if do_train
 
                 # update global config from resumed configs'
-                self.config.sample.update(sample_config_dict)
-                self.config.train.update(train_config_dict)
+                self.state.update(state_dict)
+                self.config.update(config_dict)
 
-                self.config.dataset.update(dataset_config_dict)
-                self.config.model.update(model_config_dict)
-                self.config.trainer.update(trainer_config_dict)
 
                 #@ATTN - fix this:
                 # if resumed dataset file is no longer available: erase it - either over_config's or an empty dummy will be used
@@ -201,11 +195,11 @@ class Sample:
             # ensure right vocab_size
             if init_type == 'resume':
 
-                epoch = Trainer.calc_epoch_from_sample_num(self.config.train.sample_num,
+                epoch = Trainer.calc_epoch_from_sample_num(self.state['n_samples'],
                                                            len(self.train_dataset))
-                iter_num = Trainer.iter_from_sample(self.config.train.sample_num, 
+                iter_num = Trainer.iter_from_sample(self.state['n_samples'], 
                                                     self.config.trainer.batch_size)
-                self.log(LogFlag.INIT, f"Checkpoint: num={iter_num} ({epoch:.3f} epoch), loss train={self.config.train.train_loss:.4f} val={self.config.train.val_loss:.4f} eval->{self.config.train.eval_loss:.4f}")
+                self.log(LogFlag.INIT, f"Checkpoint: num={iter_num} ({epoch:.3f} epoch), loss train={self.state['train_loss']:.4f} val={self.state['val_loss']:.4f} eval->{self.state['eval_loss']:.4f}")
 
                 assert self.config.model.vocab_size == self.train_dataset.get_vocab_size(), f"Model vocab_size ({self.config.model.vocab_size} != Dataset vocab_size ({self.train_dataset.get_vocab_size()})"
 
