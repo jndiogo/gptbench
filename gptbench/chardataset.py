@@ -9,7 +9,7 @@ from torch.utils.data import Dataset
 from torch.utils.data.dataloader import DataLoader
 import numpy as np
 
-from .utils import is_utf8, consumme_decode_utf8
+from .utils import is_utf8, consumme_decode_utf8, bool_from_any
 
 
 
@@ -334,8 +334,7 @@ class PaddedLineCharDataset(Dataset):
 
         assert len(data), "Dataset is empty"
 
-        if shuffle:
-            print
+        if bool_from_any(shuffle):
             random.shuffle(data)
 
         max_len = max([len(line) for line in data])

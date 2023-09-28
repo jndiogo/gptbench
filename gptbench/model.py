@@ -14,7 +14,8 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
-from .utils import CfgNode, top_p
+from .conf import Conf
+from .utils import top_p
 
 
 # -----------------------------------------------------------------------------
@@ -24,30 +25,26 @@ class GPT(nn.Module):
 
     @staticmethod
     def get_default_config():
-        c = CfgNode()
+        c = Conf()
 
         # device to run on
-        c.device = 'auto' # cuda, cpu
-        c.dtype = 'float32' # float32, float16, bfloat16
+        c.setup('device', 'auto', str, "Device for running the net: 'cuda', 'cpu' or any other supported by Torch")
 
-        # either model_type or (n_layer, n_head, n_embd) must be given in the config
-        c.model_type = None
-        c.n_layer = None
-        c.n_head = None # n_embd must be a multiple of n_head
-        c.n_embd =  None # n_embd must be a multiple of n_head
+        c.setup('dtype', 'float32', str, "Type: 'float32', 'bfloat16'")
+
+        c.setup('n_layer', None, int, 'Number of transformer blocks')
+        c.setup('n_head', None, int, 'Number of attention heads')
+        c.setup('n_embd', None, int, 'Number of embedding dimensions. Must be a multiple of n_head')
         
         # these options must be filled in externally
-        c.vocab_size = None
-        c.block_size = None
+        c.setup('vocab_size', None, int, 'Size of the vocabulary. Must be set from dataset in use')
+        c.setup('block_size', None, int, 'Block size: number of vocabulary items processed. Must be set')
         
         # dropout hyperparameter
-        c.dropout = 0.1
+        c.setup('dropout', 0.1, float, 'Dropout hyperparameter')
 
         return c
-
-    @staticmethod
-    def checkpoint_config_keys():
-        return ['n_layer', 'n_head', 'n_embd', 'vocab_size', 'block_size', 'dropout', 'dtype']
+        
 
 
     @classmethod
@@ -60,15 +57,13 @@ class GPT(nn.Module):
 
         # create a from-scratch initialized minGPT model
         config = cls.get_default_config()
-        config.model_type = model_type
         config.vocab_size = 50257 # openai's model vocabulary
         config.block_size = 1024  # openai's model block_size
 
         if model_config_override is not None:
-            config.merge_from_config(model_config_override, 
-                                     ["dropout", "device", "dtype"])
+            config.update(model_config_override, filter_key_list=["dropout", "device", "dtype"])
 
-        model = GPT(config)
+        model = GPT(config, model_type)
 
         sd = model.state_dict()
         sd_keys = sd.keys()
@@ -109,7 +104,10 @@ class GPT(nn.Module):
 
 
 
-    def __init__(self, config):
+    def __init__(self, config, model_type=None):
+
+        """ model_type: a predefined model configuration: 'gpt-2', 'gpt2-medium', 'gpt2-large', 'gpt2-xl' """
+
         super().__init__()
         assert config.vocab_size is not None
         assert config.block_size is not None
@@ -127,12 +125,13 @@ class GPT(nn.Module):
         self.dtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16}[config.dtype]
 
 
-        type_given = config.model_type is not None
+        type_given = model_type is not None
         params_given = all([config.n_layer is not None, config.n_head is not None, config.n_embd is not None])
-        assert type_given ^ params_given # exactly one of these (XOR)
+        assert type_given ^ params_given, "Only one of model_type or config.n_layer/n_head/config.n_embd must be given" # exactly one of these (XOR)
+
         if type_given:
             # translate from model_type to detailed configuration
-            config.merge_from_dict({
+            config.update({
                 # names follow the huggingface naming conventions
                 # GPT-1
                 #'openai-gpt':   dict(n_layer=12, n_head=12, n_embd=768),  # 117M params
@@ -148,7 +147,7 @@ class GPT(nn.Module):
                 #'gpt-mini':     dict(n_layer=6, n_head=6, n_embd=192),
                 #'gpt-micro':    dict(n_layer=4, n_head=4, n_embd=128),
                 #'gpt-nano':     dict(n_layer=3, n_head=3, n_embd=48),
-            }[config.model_type])
+            }[model_type])
 
         self.transformer = nn.ModuleDict(dict(
             wte = nn.Embedding(self.vocab_size, config.n_embd),
@@ -235,7 +234,7 @@ class GPT(nn.Module):
                 {"params": [param_dict[pn] for pn in sorted(list(decay))], "weight_decay": trainer_config.adamw_weight_decay},
                 {"params": [param_dict[pn] for pn in sorted(list(no_decay))], "weight_decay": 0.0},
             ]
-            optimizer = torch.optim.AdamW(optim_groups, lr=trainer_config.learning_rate, betas=trainer_config.adamw_betas)
+            optimizer = torch.optim.AdamW(optim_groups, lr=trainer_config.learning_rate, betas=(trainer_config.adamw_beta1,trainer_config.adamw_beta2))
         else:
             assert False, f"unknown optimizer trainer_config.opti={trainer_config.opti}"
 

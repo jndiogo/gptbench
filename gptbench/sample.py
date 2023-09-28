@@ -10,9 +10,10 @@ import numpy as np
 from .model import GPT
 from .trainer import Trainer
 
-from .config import empty_config, default_full_config, LogFlag, checkpoint_load, checkpoint_exists, dataset_get_default_config, dataset_checkpoint_config_keys, dataset_class_from_name, DATASET_CLASS_MAP
+from .config import empty_config, full_default_config, LogFlag, checkpoint_load, checkpoint_exists, dataset_get_default_config, dataset_class_from_name, DATASET_CLASS_MAP
 
-from .utils import CfgNode, print_sepline, set_seed, dict_from_str
+from .conf import Conf
+from .utils import print_sepline, set_seed, str_dict_from_str
 
 
 
@@ -27,33 +28,34 @@ class Sample:
     def get_default_config():
 
         # sample.*
-        c = CfgNode()
+        c =Conf()
 
-        c.max_len = 100 # max generated token count
+        c.setup('max_len', 100, int, 'Max generated token count')
         
-        c.count = 1 # how many times to generate from the same start_text
+        c.setup('count', 1, int, 'How many times to generate from the same start_text')
 
-        c.start_text = None # None: use random vocabulary item on each sampling. A str with starting text. If separated with start_text_sep multiple star_text are used (count is set to 1)
-        c.start_after = None # when sampling, only emit after this text has been seen
-        c.stop_before = None # when sampling, stop before emitting this. With flush=1 only works for single chars
-        c.emit_start = 1 # on sampling, emit start_text? Only if start_after is None
-        c.start_text_sep = '|' # when used in start_text, this char separates multiple start strings
 
-        c.flush = 1 # display each token immediately
-        c.eot_stop = 0 # 0 don't stop, -1 stop before, 1 stop after (and display it)
+        c.setup('start_text', None, str, 'Starting text for generation. None: use random vocabulary item on each sampling. A str with starting text.If separated with start_text_sep multiple star_text are used (count is set to 1)')
 
-        c.top = 0 # top_k/top_p  0: off,  ]0..1]: top_p,  [-1..0[: top_k(vocab_size * -top),  >=1: top_k(int(n))
-        c.temp = 1. # temperature
+        c.setup('start_after', None, str, 'When sampling, only emit after this text has been seen')
+        
+        c.setup('stop_before', None, str, 'When sampling, stop before emitting this. With flush=1 only works for single chars')
+        
+        c.setup('emit_start', True, bool, 'When sampling, emit start_text? Only if start_after is None')
+        
+        c.setup('start_text_sep', '|', str, 'When used in start_text, this char separates multiple start strings')
 
-        c.multiline_prompt = 0 # prompt mode: input multiple lines until a Ctrl+D or Ctrl+Z (in Windows)
+        c.setup('flush', True, bool, 'When sampling, should each token display immediately')
+
+        c.setup('eot_stop', 0, int, "Should generation stop when dataset's special End-Of-Text token is emitted? 0=don't stop, -1=stop before, 1=stop after (and display it)")
+
+        c.setup('top', 0., float, 'Top_k or top_p filtering: 0: off,  ]0..1]: top_p,  [-1..0[: top_k(vocab_size * -top),  >=1: top_k(int(n))')
+        c.setup('temp',  1., float, "Temperature")
+
+
+        c.setup('multiline_prompt', False, bool, 'On prompt mode: input multiple lines until a Ctrl+D or Ctrl+Z (in Windows)')
 
         return c
-
-    @staticmethod
-    def checkpoint_config_keys():
-        return ['count', 'max_len', 'start_text', 'start_after', 'stop_before', 'emit_start', 'start_text_sep', 'flush', 'eot_stop', 'top', 'temp', 'multiline_prompt']
-
-
 
 
 
@@ -62,7 +64,12 @@ class Sample:
         self.name = name
         self.log_mask = log_mask
 
-        self.config = default_full_config()
+        self.config = full_default_config()
+
+        self.state = { 'n_samples': 0, 
+                       'train_loss': float('inf'), 
+                       'val_loss': float('inf'), 
+                       'eval_loss': float('inf') }
 
         self.model = None
         self.trainer = None
@@ -127,7 +134,7 @@ class Sample:
 
 
     def get_config(self):
-        return copy.copy(self.config)
+        return copy.deepcopy(self.config)
 
 
 
@@ -139,10 +146,11 @@ class Sample:
     def _init(self, init_type, over_config):
 
         # set seed
-        seed = over_config.get_or('seed', self.config.seed)
+        seed = over_config.get('seed', self.config.seed)
         set_seed(seed, self.log_mask & LogFlag.INIT)
 
         assert self.config.dataset.has('class_name') and self.config.dataset.has('train_path'), "Need dataset to init. Set config.dataset: class_name and train_path. Or call set_datasets()"
+
 
         self._resumed_optimizer_state_dict = None
 
@@ -170,13 +178,13 @@ class Sample:
                  trainer_config_dict) = checkpoint_load(self.path, load_optimizer_state=self._can_train)
                 # only load optimizer state if do_train
 
-                # merge resumed configs into config
-                self.config.sample.merge_from_dict(sample_config_dict, Sample.checkpoint_config_keys())
-                self.config.train.merge_from_dict(train_config_dict, Train.checkpoint_config_keys())
+                # update global config from resumed configs'
+                self.config.sample.update(sample_config_dict)
+                self.config.train.update(train_config_dict)
 
-                self.config.dataset.merge_from_dict(dataset_config_dict, dataset_checkpoint_config_keys())
-                self.config.model.merge_from_dict(model_config_dict, GPT.checkpoint_config_keys())
-                self.config.trainer.merge_from_dict(trainer_config_dict, Trainer.checkpoint_config_keys())
+                self.config.dataset.update(dataset_config_dict)
+                self.config.model.update(model_config_dict)
+                self.config.trainer.update(trainer_config_dict)
 
                 #@ATTN - fix this:
                 # if resumed dataset file is no longer available: erase it - either over_config's or an empty dummy will be used
@@ -184,9 +192,9 @@ class Sample:
                 #    config.dataset.train_path = None
 
 
-            # merge over_config into config for the final resolved config
-            self.config.merge_from_config(over_config)
-
+            # finally update global config from users's over_config, for the final resolved config
+            self.config.update(over_config)
+    
             # load datasets
             (self.train_dataset, self.val_dataset) = self._load_datasets()
 
@@ -215,8 +223,8 @@ class Sample:
 
             self.log(LogFlag.INIT, f"Initializing model from {init_type}")
 
-            # merge over_config into config for the final resolved config
-            self.config.merge_from_config(over_config)
+            # update from over_config
+            self.config.update(over_config)
 
             # will set config.model.* parameters as needed
             self.model, self.config.model = GPT.from_pretrained(init_type, self.config.model)
@@ -267,9 +275,9 @@ class Sample:
 
         #override existing keys
         if over_sample_config is not None:
-            self.config.sample.merge_from_config(over_sample_config)
+            self.config.sample.update(over_sample_config)
         # override existing keys from kwargs
-        self.config.sample.merge_from_dict(over_sample_config_kwargs, existing_only=True)
+        self.config.sample.update(over_sample_config_kwargs)
 
 
 
@@ -298,7 +306,7 @@ class Sample:
             sep.join(start_text)
 
         # override existing config.sample keys from kwargs
-        self.config.sample.merge_from_dict(over_sample_config_kwargs, existing_only=True)
+        self.config.sample.update(over_sample_config_kwargs)
 
         sample_config = self.config.sample
 
@@ -539,7 +547,6 @@ class Sample:
         'quit',
         'config',
 
-        'start_text',
         'count',
         'max_len',
 
@@ -559,11 +566,12 @@ class Sample:
 
 
         # override existing config.sample keys from kwargs
-        self.config.sample.merge_from_dict(over_sample_config_kwargs, existing_only=True)
+        self.config.sample.update(over_sample_config_kwargs)
 
 
         sample_config = self.config.sample
-        sample_config.flush = 1 #  this is setting global config
+        sample_config.flush = True #  this is setting global config
+        del sample_config.start_text # we'll provide this directly
 
 
         stop_asap = [False]
@@ -634,11 +642,11 @@ class Sample:
 
                     elif k == 'config':
                         print("Config:")
-                        print(self.config)
+                        print(self.config.dump(int(v)))
 
                     else:
                         cmd_list = [ '-' + k + '=' + v ]
-                        sample_config.merge_from_args(cmd_list, key_must_exist=True)
+                        sample_config.update_from_args(cmd_list)
 
                 if quit:
                     break
@@ -648,7 +656,7 @@ class Sample:
                 stop_asap = [False]
                 signal.signal(signal.SIGINT, signal_handler)
 
-                self.sample(start_text, over_sample_config=sample_config, stop_asap=stop_asap)
+                self.sample(start_text, stop_asap=stop_asap, **sample_config.to_dict())
 
                 signal.signal(signal.SIGINT, original_sigint)
 
@@ -681,16 +689,22 @@ class Sample:
         # extra params?
         if dataset_config.params is not None:
             params = dataset_config.params.replace('\\n', '\n')
-            kwargs = dict_from_str(params)
+            kwargs = str_dict_from_str(params)
         else:
             kwargs = {}
 
+        try:
+            val_path_or_train_split = float(dataset_config.val_path_or_train_split)
+        except ValueError:
+            val_path_or_train_split = str(dataset_config.val_path_or_train_split)
+
         return cls.load_train_val_datasets(dataset_config.train_path,
-                                           dataset_config.val_path_or_train_split,
+                                           val_path_or_train_split,
                                            block_size,
                                            repeat_if_needed=True,
                                            verbose=self.log_mask & LogFlag.INIT,
                                            **kwargs)
+
 
 
 

@@ -14,7 +14,6 @@ if __name__ == '__main__':
     # train
 
     # sample
-    c.sample.eotstop = 1
 
     # dataset
     c.dataset.class_name = 'char'

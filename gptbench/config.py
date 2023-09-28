@@ -10,7 +10,7 @@ import torch
 from .tokendataset import GPT2TokensDataset
 from .chardataset import CharDataset, PaddedLineCharDataset
 
-from .utils import CfgNode
+from .conf import Conf
 
 
 
@@ -41,30 +41,30 @@ No booleans: use 0 or 1 instead
 
 def empty_config():
     """ an empty config: options that are later set will override the full config """
-    c = CfgNode()
+    c = Conf()
 
     # sample
-    c.sample = CfgNode()
+    c.sample = Conf()
 
     # train
-    c.train = CfgNode()
+    c.train = Conf()
 
 
     # dataset
-    c.dataset = CfgNode()
+    c.dataset = Conf()
 
     # model
-    c.model = CfgNode()
+    c.model = Conf()
 
     # trainer
-    c.trainer = CfgNode()
+    c.trainer = Conf()
 
     return c
 
 
 
-def default_full_config():
-    """ returns a full config with all possible values """
+def full_default_config():
+    """ returns a full config with all possible values, type information and help"""
 
     from .sample import Sample
     from .train import Train
@@ -99,20 +99,18 @@ def default_full_config():
 
 # -----------------------------------------------------------------------------
 def dataset_get_default_config():
-    c = CfgNode()
-
-    c.class_name = None
     
-    c.train_path = None
-    c.val_path_or_train_split = 0.9 # 0..1 float: train_split for validation dataset from train dataset, str: validation dataset path
+    c = Conf()
 
-    c.params = None # a string in the form "name=vale,name=value,..." with extra parameters for dataset creation
+    c.setup('class_name', None, str, 'Dataset type id: ' + ','.join(DATASET_CLASS_MAP.keys()))
+    
+    c.setup('train_path', None, str, 'Train dataset path')
+    c.setup('val_path_or_train_split', '0.9', str, 'Validation dataset, can be of type float or a string. 0..1 float: train_split for validation dataset from train dataset, string: validation dataset path')
+
+    c.setup('params', None, str, "String in the form 'name=vale,name=value,...' containing extra parameters for dataset creation")
 
     return c
 
-
-def dataset_checkpoint_config_keys():
-    return ['class_name', 'train_path', 'val_path_or_train_split']
 
 
 
@@ -127,7 +125,7 @@ def dataset_class_from_name(class_name):
 
 
 # -----------------------------------------------------------------------------
-def merge_config_from_sysargv(sys_argv, base_config = None):
+def merge_config_from_sysargv(sys_argv, base_config=None):
 
     argv = sys_argv[1:]
 
@@ -136,7 +134,7 @@ def merge_config_from_sysargv(sys_argv, base_config = None):
     else:
         config = empty_config()
 
-    config.merge_from_args(argv, key_must_exist=False)
+    config.update_from_args(argv, key_must_exist=False)
 
     return config
 
@@ -215,8 +213,8 @@ def checkpoint_save(path_prefix,
 
 
 
-def checkpoint_exists(path_prefix):
 
+def checkpoint_exists(path_prefix):
     return ( os.path.isfile(path_prefix + "model.pt") and 
              os.path.isfile(path_prefix + "optimizer.pt") and 
              os.path.isfile(path_prefix + "config.json") )

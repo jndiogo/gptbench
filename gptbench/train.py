@@ -2,7 +2,7 @@
 
 """
 
-import os, sys, copy, signal, json
+import os, sys, signal, json, copy
 
 import torch
 from torch.utils.tensorboard import SummaryWriter
@@ -12,9 +12,10 @@ from .sample import Sample, LogFlag, DEFAULT_NAME, DEFAULT_WORK_DIR
 from .model import GPT
 from .trainer import Trainer
 
-from .config import checkpoint_save, dataset_checkpoint_config_keys, loss_append, loss_trim
+from .config import checkpoint_save, loss_append, loss_trim
 
-from .utils import CfgNode, print_sepline, cuda_max_memory_init, cuda_max_memory
+from .conf import Conf
+from .utils import print_sepline, cuda_max_memory_init, cuda_max_memory
 
 
 
@@ -26,33 +27,35 @@ class Train(Sample):
     def get_default_config():
 
         # train.*
-        c = CfgNode()
+        c = Conf()
 
-        c.sample_num = 0 # total trained samples
+        # these are not config settings but stored counts/best loss information'
+        c.setup('sample_num', 0, int, 'The number of trained samples so far')
 
-        c.train_loss = float('inf') # last evaluated train dataset loss
-        c.val_loss = float('inf') # last evaluated validation dataset loss
-        c.eval_loss = float('inf') # last evaluation loss calculated from train_loss and val_loss according to eval_type
+        c.setup('train_loss', float('inf'), float, 'Last evaluated train dataset loss')
 
-        c.eval_period = 100 # in batch iters: each n batches we eval and check if saving model. 0 for none
-        c.eval_type = 1.0 # how to estimate loss -> 0: on train data, 1: on val data (or train if no val dataset), ]0,1[: weighted average of train and val (or train only if no val dataset)
-        c.eval_iters = 100
-        c.eval_save_checkpt = 1 # 0=never, 1=on new lower loss, 2=always
-        c.eval_save_loss = 'csv,tensorboard' # multiple values allowed: csv path/loss.csv, tensorboard
+        c.setup('val_loss', float('inf'), float, 'Last evaluated validation dataset loss')
 
-        c.sample_period = -10. # in batch_iters: when to sample. 0=never. Negative means -multiples of eval_period
-
-        c.log_period = -0.1 # in batch iters: simple forward pass loss log. Negative means -multiples of eval_period
+        c.setup('eval_loss', float('inf'), float, 'Last evaluation loss calculated from train_loss and val_loss according to eval_type')
 
 
-        c.batch_end_callback = 'default' # 'default', None, or callback - see Train.default_batch_end_callback()
+        c.setup('eval_period', 100, int, 'In batch iterations: each n batches we eval and check if saving model. 0 for none')
+
+        c.setup('eval_type', 1.0, float, 'How to estimate loss -> 0: on train data, 1: on val data (or train if no val dataset), ]0,1[: weighted average of train and val (or train only if no val dataset')
+
+        c.setup('eval_iters', 100, int, 'Count of batch_size iterations for loss evaluation')
+
+        c.setup('eval_save_checkpt', 1, int, 'When to save a checkpoint: 0=never, 1=on new lower evaluated loss, 2=always')
+
+        c.setup('eval_save_loss', 'csv,tensorboard', str, "Multiple values allowed: 'csv' saves a loss.csv, 'tensorboard' creates tensorboard logs")
+
+
+        c.setup('sample_period', -10., float, 'When to sample, in batch iterations. 0=never. Negative means -multiples of eval_period')
+
+
+        c.setup('log_period', -0.1, float, 'Simple forward pass loss log in batch iterations. Negative means -multiples of eval_period')
 
         return c
-
-
-    @staticmethod
-    def checkpoint_config_keys():
-        return ['sample_num', 'train_loss', 'val_loss', 'eval_loss', 'eval_period', 'eval_type', 'eval_iters', 'eval_save_checkpt', 'sample_period', 'log_period']
 
 
 
@@ -68,16 +71,16 @@ class Train(Sample):
 
     def update_train_config(self, over_train_config=None, **over_train_config_kwargs):
         if over_train_config is not None:
-            self.config.train.merge_from_config(over_train_config)
+            self.config.train.update(over_train_config)
         # override existing keys from kwargs
-        self.config.train.merge_from_dict(over_train_config_kwargs, existing_only=True)
+        self.config.train.update(over_train_config_kwargs)
 
 
     def update_trainer_config(self, over_trainer_config=None, **over_trainer_config_kwargs):
         if over_trainer_config is not None:
-            self.config.trainer.merge_from_config(over_trainer_config)
+            self.config.trainer.update(over_trainer_config)
         # override existing keys from kwargs
-        self.config.trainer.merge_from_dict(over_trainer_config_kwargs, existing_only=True)
+        self.config.trainer.update(over_trainer_config_kwargs)
 
 
 
@@ -99,10 +102,8 @@ class Train(Sample):
             self.config.trainer.batch_size = trainer_batch_size
 
         # train config ------------------------------------------------------
-        if batch_end_callback is not None:
-            self.config.train.batch_end_callback = batch_end_callback
         #override existing config.train keys from kwargs
-        self.config.train.merge_from_dict(over_train_config_kwargs, existing_only=True)
+        self.config.train.update(over_train_config_kwargs)
 
 
         # sanity checks
@@ -163,15 +164,10 @@ class Train(Sample):
                 self._tensorboard_writer = SummaryWriter(log_dir=self.log_path)
 
 
+        if batch_end_callback is None:
+            batch_end_callback = Train.default_batch_end_callback
 
-        if self.config.train.batch_end_callback is not None:
-            batch_end_callback = self.config.train.batch_end_callback
-
-            if batch_end_callback == 'default':
-                batch_end_callback = Train.default_batch_end_callback
-
-            self.trainer.set_callback('on_batch_end', lambda trainer: batch_end_callback(trainer, self))
-
+        self.trainer.set_callback('on_batch_end', lambda trainer: batch_end_callback(trainer, self))
 
 
 
@@ -231,7 +227,7 @@ class Train(Sample):
                 eval_loss = train_loss
                 val_loss = float('inf')
             else:
-                eval_loss = train_loss * (1.-train_config.eval_type) + val_loss * train_config.eval_type            
+                eval_loss = train_loss * (1. - train_config.eval_type) + val_loss * train_config.eval_type            
 
             # update config after evaluation
             train_config.train_loss = train_loss
@@ -286,12 +282,12 @@ class Train(Sample):
         checkpoint_save(self.path, 
                         self.model, self.trainer.optimizer,
 
-                        self.config.sample.to_dict(False, Sample.checkpoint_config_keys()),
-                        self.config.train.to_dict(False, Train.checkpoint_config_keys()),
+                        self.config.sample.to_dict(include_non_jsonable=False),
+                        self.config.train.to_dict(include_non_jsonable=False),
 
-                        self.config.model.to_dict(False, GPT.checkpoint_config_keys()), 
-                        self.config.dataset.to_dict(False, dataset_checkpoint_config_keys()),
-                        self.config.trainer.to_dict(False, Trainer.checkpoint_config_keys())
+                        self.config.model.to_dict(include_non_jsonable=False),
+                        self.config.dataset.to_dict(include_non_jsonable=False),
+                        self.config.trainer.to_dict(include_non_jsonable=False)
                         )
 
 

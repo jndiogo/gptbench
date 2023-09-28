@@ -9,38 +9,37 @@ from collections import defaultdict
 import torch
 from torch.utils.data.dataloader import DataLoader
 
-from .utils import CfgNode
+from .conf import Conf
+
 
 class Trainer:
 
     @staticmethod
     def get_default_config():
-        c = CfgNode()
+        c = Conf()
 
         # dataloader parameters
-        c.n_workers = 0 # DataLoader workers. In Windows setting to above 0 causes iter() long delay.
+        c.setup('n_workers', 0, int, 'DataLoader workers. In Windows setting to above 0 causes a long delay when calling iter().')
 
-        c.batch_size = 32
+        c.setup('batch_size', 32, int, 'Size of the batch in each forward training iteration')
 
-        c.max_samples = None # absolute maximum samples. -n for n of epochs 
+        c.setup('max_samples', None, int, 'Absolute maximum limit on training samples. Negative -n for number of epochs')
 
-        c.grad_norm_clip = 1.0
+        c.setup('grad_norm_clip', 1.0, float, 'Clip gradients to this norm')
 
         # optimizer parameters
-        c.opti = 1 # 0: SGD, 1: AdamW
+        c.setup('opti', 1, int, 'Optimizer type: # 0: SGD, 1: AdamW')
 
-        c.learning_rate = 1e-4 #5e-4? @TODO: find reasonable value. "the model we're using is so small that we can go a bit faster"
+        c.setup('learning_rate', 1e-4, float, 'Initial learning rate.') 
+        #5e-4? @TODO: find reasonable value. "the model we're using is so small that we can go a bit faster"
 
         # these are for AdamW optimizer
-        c.adamw_betas = (0.9, 0.95)
-        c.adamw_weight_decay = 0.1 # only applied on matmul weights
-
+        c.setup('adamw_beta1', 0.9, float, 'AdamW beta1'), 
+        c.setup('adamw_beta2', 0.95, float, 'AdamW beta1'),
+        c.setup('adamw_weight_decay', 0.1, float, 'AdamW weight decay, only applied on matmul weights')
 
         return c
 
-    @staticmethod
-    def checkpoint_config_keys():
-        return ['batch_size', 'max_samples', 'opti', 'learning_rate', 'adamw_betas', 'adamw_weight_decay', 'grad_norm_clip']
 
 
     def __init__(self, trainer_config, train_dataset, model, 
