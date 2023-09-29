@@ -24,18 +24,24 @@ class CharDataset(Dataset):
 
 
     @staticmethod
-    def load_train_val_datasets(train_path, val_path_or_train_split,
-                                block_size, 
-                                repeat_if_needed=False, 
+    def load_train_val_datasets(block_size, 
+                                train_path, train_split=None, val_path=None,
                                 verbose=True,
+
+                                repeat_if_needed=False, 
                                 **ignore_other_kwargs):
+
         """ returns train_dataset, val_dataset - val dataset can be None """
+
+        # extra params (after verbose) can come from strings, convert eventual non-str:
+        repeat_if_needed = bool_from_any(repeat_if_needed)
 
         data = CharDataset.load_data(data_path=train_path, verbose=verbose)
 
-        if isinstance(val_path_or_train_split, str): # val from path
+        val = None
+        if val_path is not None: # val from path
 
-            val_data = CharDataset.load_data(data_path=val_path_or_train_split, verbose=verbose)
+            val_data = CharDataset.load_data(data_path=val_path, verbose=verbose)
 
             # calc combined vocab
             shared_vocab_chars = CharDataset.calc_vocab_chars(data + val_data)
@@ -47,12 +53,11 @@ class CharDataset(Dataset):
                               repeat_if_needed=repeat_if_needed, 
                               shared_vocab_chars=shared_vocab_chars, verbose=verbose)
 
-        else: # split from train
-            assert isinstance(val_path_or_train_split, float), "val_path_or_train_split can be of str (path) or float (train_split) types"
+        elif train_split is not None:
 
-            assert val_path_or_train_split > 0. and val_path_or_train_split <= 1., "0 < train split <= 1"
+            assert train_split > 0. and train_split <= 1., "0 < train split <= 1"
 
-            split_index = int(len(data) * val_path_or_train_split)
+            split_index = int(len(data) * train_split)
 
             train = CharDataset(block_size, data=data[:split_index], 
                                 repeat_if_needed=repeat_if_needed, verbose=verbose)
@@ -62,8 +67,10 @@ class CharDataset(Dataset):
                 val = CharDataset(block_size, data=data[split_index:], 
                                   repeat_if_needed=repeat_if_needed,
                                   shared_vocab_chars=shared_vocab_chars, verbose=verbose)
-            else:
-                val = None
+
+        else:
+            train = CharDataset(block_size, data=data, 
+                                repeat_if_needed=repeat_if_needed, verbose=verbose)
 
         return train, val
 
@@ -222,42 +229,50 @@ class PaddedLineCharDataset(Dataset):
     """
     UTF-8 character dataset. index <=> full utf-8 character. Read from line-based text files.
     Each sample is padded at the right with a given char. Last X char predicts a -1 index in Y, no used for loss calc.
+    Empty lines will be removed.
     """
 
 
     @staticmethod
-    def load_train_val_datasets(train_path, val_path_or_train_split,
-                                block_size, 
+    def load_train_val_datasets(block_size, 
+                                train_path, train_split=None, val_path=None,
+                                verbose=True,
+
                                 line_sep_char='\n',
                                 pad_char='\0',
                                 shuffle=False,
-                                verbose=True,
                                 **ignore_other_kwargs):
         """ returns train_dataset, val_dataset - val dataset can be None """
 
+        # extra params (after verbose) can come from strings, convert eventual non-str:
+        shuffle = bool_from_any(shuffle)
+
         data = PaddedLineCharDataset.load_data(data_path=train_path, verbose=verbose)
 
-        if isinstance(val_path_or_train_split, str): # val from path
+        val = None
 
-            val_data = PaddedLineCharDataset.load_data(data_path=val_path_or_train_split, verbose=verbose)
+        if val_path is not None: # val from path
+
+            val_data = PaddedLineCharDataset.load_data(data_path=val_path, verbose=verbose)
 
             # calc combined vocab
-            shared_vocab_chars = PaddedLineCharDataset.calc_vocab_chars(data + val_data)
+            shared_vocab_chars = PaddedLineCharDataset.calc_vocab_chars(data + val_data, 
+                                                                        line_sep_char=line_sep_char,
+                                                                        pad_char=pad_char)
 
             train = PaddedLineCharDataset(block_size, data=data, 
-                                line_sep_char=line_sep_char, pad_char=pad_char, shuffle=shuffle,
-                                shared_vocab_chars=shared_vocab_chars, verbose=verbose)
+                                          line_sep_char=line_sep_char, pad_char=pad_char, shuffle=shuffle,
+                                          shared_vocab_chars=shared_vocab_chars, verbose=verbose)
 
             val = PaddedLineCharDataset(block_size, data=val_data,
                               line_sep_char=line_sep_char, pad_char=pad_char, shuffle=shuffle,
                               shared_vocab_chars=shared_vocab_chars, verbose=verbose)
 
-        else: # split from train
-            assert isinstance(val_path_or_train_split, float), "val_path_or_train_split can be of str (path) or float (train_split) types"
+        elif train_split is not None: # split from train
 
-            assert val_path_or_train_split > 0. and val_path_or_train_split <= 1., "0 < train split <= 1"
+            assert train_split > 0. and train_split <= 1., "0 < train split <= 1"
 
-            split_index = int(len(data) * val_path_or_train_split)
+            split_index = int(len(data) * train_split)
 
             train = PaddedLineCharDataset(block_size, data=data[:split_index],
                                 line_sep_char=line_sep_char, pad_char=pad_char, shuffle=shuffle,
@@ -268,8 +283,11 @@ class PaddedLineCharDataset(Dataset):
                 val = PaddedLineCharDataset(block_size, data=data[split_index:],
                                   line_sep_char=line_sep_char, pad_char=pad_char, shuffle=shuffle,
                                   shared_vocab_chars=shared_vocab_chars, verbose=verbose)
-            else:
-                val = None
+
+        else:
+            train = PaddedLineCharDataset(block_size, data=data,
+                                line_sep_char=line_sep_char, pad_char=pad_char, shuffle=shuffle,
+                                verbose=verbose)
 
         return train, val
 
@@ -291,9 +309,14 @@ class PaddedLineCharDataset(Dataset):
 
 
     @staticmethod
-    def calc_vocab_chars(data):
-        """ Doesn't include padding char - just the useful chars """
-        return sorted( list(set(data)) )
+    def calc_vocab_chars(data, line_sep_char, pad_char):
+        """ Includes padding char, but not line_sep """
+        chars = list(set(data + pad_char))
+
+        if line_sep_char in chars:
+            chars.remove(line_sep_char)
+
+        return sorted(chars)
 
 
     def __init__(self, block_size, data=None, data_path=None,
@@ -318,12 +341,7 @@ class PaddedLineCharDataset(Dataset):
         if shared_vocab_chars is not None:            
             chars = shared_vocab_chars
         else:
-            chars = PaddedLineCharDataset.calc_vocab_chars(data)
-            if line_sep_char in chars:
-                chars.remove(line_sep_char)
-
-        if pad_char not in chars: # insert pad_char as index 0
-            chars = [pad_char] + chars
+            chars = PaddedLineCharDataset.calc_vocab_chars(data, line_sep_char=line_sep_char, pad_char=pad_char)
 
         self.vocab_size = len(chars)
 
@@ -332,7 +350,9 @@ class PaddedLineCharDataset(Dataset):
 
         data = data.split(line_sep_char)
 
-        assert len(data), "Dataset is empty"
+        data = [d for d in data if len(d)] # remove empty entries
+
+        assert len(data), "Dataset cannot be empty empty"
 
         if bool_from_any(shuffle):
             random.shuffle(data)
@@ -405,9 +425,12 @@ class PaddedLineCharDataset(Dataset):
 
         for ib in range(b):
             row = ids[ib,:].tolist()
-            index = row.find(0) # pad char is 0
-            if index >= 0:
+
+            try:
+                index = row.index(0) # pad char is 0
                 row=row[:index]
+            except ValueError:
+                ... # full row
 
             text = ''.join([self.itos[int(i)] for i in row])
             out.append(text)
@@ -427,18 +450,23 @@ class PaddedLineCharDataset(Dataset):
     def __getitem__(self, idx):
         line = self.data[idx]
         # encode every character to an integer
-        dix = self.encode(chunk)
+        dix = self.encode(line)
 
         # zero is the pad index
         x = torch.zeros(self.block_size, dtype=torch.long)
-        y = torch.tensor(self.block_size, dtype=torch.long)
+        y = torch.zeros(self.block_size, dtype=torch.long)
 
-        ll = len(line)
+        ll = len(dix)
+        x[:ll] = torch.as_tensor(dix)
+        y[:ll-1] = torch.as_tensor(dix[1:])
+        # would never stop! y[ll-1] = -1 # prediction for last char in x shall not be used for loss calc
 
-        x[:ll] = line
-        y[:ll-1] = line[1:]
-        y[ll-1] = -1 # prediction for last char in x  shall not be used for loss calc
-
+        """
+        n_zerozero = 3 # how many 0->0 to leave
+        if ll+n_zerozero < self.block_size: # mark all after last y==0 to be -1 to not be accounted for loss
+            y[ll+n_zerozero:] = -1
+        """
+        
         return x, y
 
 

@@ -28,7 +28,7 @@ class Trainer:
         c.setup('grad_norm_clip', 1.0, float, 'Clip gradients to this norm')
 
         # optimizer parameters
-        c.setup('opti', 1, int, 'Optimizer type: # 0: SGD, 1: AdamW')
+        c.setup('optimizer', 'adamw', str, "Optimizer type: sgd or 'adamw'")
 
         c.setup('learning_rate', 1e-4, float, 'Initial learning rate.') 
         #5e-4? @TODO: find reasonable value. "the model we're using is so small that we can go a bit faster"

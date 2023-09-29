@@ -7,7 +7,7 @@ import os, sys, copy
 from .sample import Sample
 from .train import Train
 
-from .config import merge_config_from_sysargv
+from .config import merge_config_from_sysargv, empty_config
 
 from .conf import Conf
 
@@ -79,3 +79,11 @@ def config_run(config, sys_argv = None):
         do.prompt()
 
     return do
+
+
+
+
+if __name__ == '__main__':
+
+    c = empty_config()
+    obj = config_run(c, sys.argv)

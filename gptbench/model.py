@@ -189,10 +189,10 @@ class GPT(nn.Module):
 
     def configure_optimizers(self, trainer_config):
 
-        if trainer_config.opti == 0: # SGD
+        if trainer_config.optimizer == 'sgd': # SGD
             optimizer = torch.optim.SGD(self.parameters(), lr=trainer_config.learning_rate)
 
-        elif trainer_config.opti == 1: # AdamW
+        elif trainer_config.optimizer == 'adamw': # AdamW
             """
             This long function is unfortunately doing something very simple and is being very defensive:
             We are separating out all parameters of the model into two buckets: those that will experience
@@ -236,7 +236,7 @@ class GPT(nn.Module):
             ]
             optimizer = torch.optim.AdamW(optim_groups, lr=trainer_config.learning_rate, betas=(trainer_config.adamw_beta1,trainer_config.adamw_beta2))
         else:
-            assert False, f"unknown optimizer trainer_config.opti={trainer_config.opti}"
+            assert False, f"unknown optimizer trainer.optimizer={trainer_config.optimizer}"
 
         return optimizer
 

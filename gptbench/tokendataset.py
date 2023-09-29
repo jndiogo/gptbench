@@ -32,23 +32,30 @@ class GPT2TokensDataset(Dataset):
     """
 
     @staticmethod
-    def load_train_val_datasets(train_path, val_path_or_train_split,
-                                block_size, 
-                                repeat_if_needed=False,
+    def load_train_val_datasets(block_size, 
+                                train_path, train_split=None, val_path=None,                                
                                 verbose=True,
+
+                                repeat_if_needed=False,
                                 **ignore_other_kwargs):
+
         """ returns train_dataset, val_dataset - val dataset can be None """
+
+        # extra params (after verbose) can come from strings, convert eventual non-str:
+        repeat_if_needed = bool_from_any(repeat_if_needed)
 
         data = GPT2TokensDataset.load_data(data_path=train_path, verbose=verbose)
 
-        if isinstance(val_path_or_train_split, str): # val from path
+        val = None
+
+        if val_path is not None: # val from path
+
             train = GPT2TokensDataset(block_size, data=data, repeat_if_needed=repeat_if_needed, verbose=verbose)
-            val = GPT2TokensDataset(block_size, data_path=val_path_or_train_split, repeat_if_needed=repeat_if_needed, verbose=verbose)
+            val = GPT2TokensDataset(block_size, data_path=val_path, repeat_if_needed=repeat_if_needed, verbose=verbose)
 
-        else: # split from train
-            assert isinstance(val_path_or_train_split, float), "val_path_or_train_split can be of str (path) or float (train_split) types"
+        elif train_split is not None: # split from train
 
-            assert val_path_or_train_split > 0. and val_path_or_train_split <= 1., "0 < train split <= 1"
+            assert train_split > 0. and train_split <= 1., "0 < train split <= 1"
 
             # handle dummy dataset split:
             split_index = int(len(data) * val_path_or_train_split)
@@ -59,8 +66,9 @@ class GPT2TokensDataset(Dataset):
 
             if split_index > 0 and split_index < len(data):
                 val = GPT2TokensDataset(block_size, data=data[split_index:], repeat_if_needed=repeat_if_needed, verbose=verbose)
-            else:
-                val = None
+
+        else:
+            train = GPT2TokensDataset(block_size, data=data, repeat_if_needed=repeat_if_needed, verbose=verbose)
 
         return train, val
 

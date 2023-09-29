@@ -13,13 +13,14 @@ class Conf():
     Doesn't support copy.copy(): use Conf.copy()
     """
     
-    def __init__(self, *args, **kwargs):
-        self.__dict__['_registry'] = dict()
+    def __init__(self, _registry=None, *args, **kwargs):
+        # __dict__ access is necessary here to avoid infinite recursion:
+        self.__dict__['_registry'] = dict(_registry) if _registry is not None else dict()
         self.__dict__['_dict'] = dict(*args, **kwargs)
 
     
     def setup(self, name, value, value_type, info=None):
-        assert value is None or type(value) == value_type, "value can only be None or of value_type"
+        assert value is None or type(value) == value_type, f"value can only be None or of value_type ({value_type})"
 
         self._registry[name] = (value_type, info)
         self._local_set(name, value)
@@ -38,9 +39,10 @@ class Conf():
         except KeyError:
             return default_value
 
-    def set(self, path, value):
+    def set(self, *args, **kwargs):
         """ Accepts path-like access: name1.name2.name3 """
-        self._path_set(path,value)
+        for k,v in dict(*args, **kwargs).items():
+            self._path_set(k,v)
     
             
     
@@ -67,7 +69,7 @@ class Conf():
 
             if LOG: print("obj,leaf_name", obj,leaf_name)
 
-            assert leaf_name in obj, f"Destination key path '{k}' does not exist"
+            assert leaf_name in obj, f"Unknown key '{k}'"
 
             if isinstance(obj[leaf_name], type(self)):
                 obj[leaf_name].update(v.items())
@@ -79,7 +81,7 @@ class Conf():
     #    """ local_keys_list: only update local keys which are in this list """
     #    self.update(other_config.items())
 
-    
+
     def update_from_args(self, args_list, key_must_exist=True):
         """
         Update the config from a list of strings that is expected to come from the command line, i.e. sys.argv[1:].
@@ -117,7 +119,7 @@ class Conf():
             obj, leaf_name = self._obj_leaf_name_from_path(k)
 
             if key_must_exist:
-                assert leaf_name in obj, f"Destination key path '{k}' does not exist"
+                assert leaf_name in obj, f"Unknown destination key '{k}'"
 
             if leaf_name in obj and isinstance(obj[leaf_name], type(self)):
                 obj[leaf_name].update(v.items())
@@ -234,11 +236,12 @@ class Conf():
 
     def __copy__(self):
         if LOG: print('__copy__')
-        return type(self)(**self._dict)
+        ret = type(self)(_registry=self._registry, **self._dict)
+        return ret
 
     def __deepcopy__(self, memo):
         if LOG: print('__deepcopy__')
-        return type(self)(**copy.deepcopy(self._dict))
+        return type(self)(_registry=self._registry, **copy.deepcopy(self._dict))
 
 
     def __str__(self):
@@ -253,9 +256,6 @@ class Conf():
         _own = []
         sub = []
         for k, v in self._dict.items():
-
-            if k == '_registry' and verbose < 2:
-                continue
 
             if isinstance(v, type(self)):
 
@@ -279,6 +279,10 @@ class Conf():
                 else:
                     _own.append(indent_str + st)
 
+        
+        if verbose >= 2 and len(self._registry):
+            _own.append(indent_str + "_registry=%s" % self._registry)
+        
         sep = '\n' if verbose else ''
         out = sep.join(own + _own)
 
@@ -289,7 +293,9 @@ class Conf():
         return out
 
 
-    
+
+
+   
     #--------------------------------------------------------------------
     
     def _obj_leaf_name_from_path(self, path):
@@ -328,4 +334,8 @@ class Conf():
             return obj._dict[leaf_name]
         else:
             raise KeyError(path)
+
+
+
+
 

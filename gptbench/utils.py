@@ -152,28 +152,33 @@ def consumme_decode_utf8(b):
 
 
 
-
 def str_dict_from_str(st):
     """
-    Convert a string in the form "name=value,name=value,..." into a dict.
-    Escape any commas in value to \,.
+    Convert a string in the form name1=value1,name2=value2,... into a dict.
+    Escape commas in values as \,. Values can contain '=' without problems
     """
-
+    
     st = st.replace('\,', '\0')
-    st = st.replace('\\n,', '\n')
-    args = st.split(',')
 
-    out={}
+    out = {}
 
-    for arg in args:
-        keyval = arg.split('=')
-        if len(keyval) >= 2:
-            key = keyval[0]
-            val = '='.join(keyval[1:]) # andle values containing '=' chars
-            out[key] = val.replace('\0', ',') # previous \, -> ,
-        # ignore entries not in key=value format
+    pairs = st.split(',')
+    for kv in pairs:
+
+        keyval = kv.split('=')
+        l = len(keyval)
+        if l >= 2: # take care of accepting multiple '=' like -start="1+1=?"
+            keyval[1] = '='.join(keyval[1:])
+            keyval = keyval[:2]
+
+            key, val = keyval # unpack
+            val = val.replace('\0','\,')
+
+        out[key] = val
 
     return out
+
+
 
 
 def bool_from_any(v):

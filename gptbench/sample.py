@@ -37,14 +37,16 @@ class Sample:
 
         c.setup('start_text', None, str, 'Starting text for generation. None: use random vocabulary item on each sampling. A str with starting text.If separated with start_text_sep multiple star_text are used (count is set to 1)')
 
-        c.setup('start_after', None, str, 'When sampling, only emit after this text has been seen')
-        
-        c.setup('stop_before', None, str, 'When sampling, stop before emitting this. With flush=1 only works for single chars')
-        
-        c.setup('emit_start', True, bool, 'When sampling, emit start_text? Only if start_after is None')
-        
         c.setup('start_text_sep', '|', str, 'When used in start_text, this char separates multiple start strings')
 
+
+        c.setup('emit_start', True, bool, 'When sampling, emit start_text? Only if emit_after is None')
+        
+        c.setup('emit_after', None, str, 'When sampling, only emit after this text has been seen')
+        
+        c.setup('emit_before', None, str, 'When sampling, stop before emitting this. With flush=1 only works for single chars')
+
+        
         c.setup('flush', True, bool, 'When sampling, should each token display immediately')
 
         c.setup('eot_stop', 0, int, "Should generation stop when dataset's special End-Of-Text token is emitted? 0=don't stop, -1=stop before, 1=stop after (and display it)")
@@ -89,21 +91,20 @@ class Sample:
 
 
     def set_datasets(self, class_name, 
-                     train_path, val_path=None, train_split=None,
+                     train_path, train_split=None,
+                     val_path=None, 
                      params_str=None,
                      **params_kwargs):
 
         assert class_name in DATASET_CLASS_MAP, f"Unknown dataset class '{class_name}'"
-        assert (val_path is None) or (train_split is None), "Can't set both val_path and train_split"
-        assert (params_str is not None) ^ bool(len(params_kwargs)), "Only params_str or kwargs can be given"
+        assert not ((params_str is not None) and bool(len(params_kwargs))), "Only one of params_str or **params_kwargs can be given"
 
         self.config.dataset.class_name = class_name
-        self.config.dataset.train_path = train_path
 
-        if val_path is not None:
-            self.config.dataset.val_path_or_train_split = str(val_path)
-        if train_split is not None:
-            self.config.dataset.val_path_or_train_split = float(train_split)
+        self.config.dataset.train_path = train_path
+        self.config.dataset.train_split = train_split
+
+        self.config.dataset.val_path = val_path
 
         params=''
         if len(params_kwargs):
@@ -199,9 +200,9 @@ class Sample:
                                                            len(self.train_dataset))
                 iter_num = Trainer.iter_from_sample(self.state['n_samples'], 
                                                     self.config.trainer.batch_size)
-                self.log(LogFlag.INIT, f"Checkpoint: num={iter_num} ({epoch:.3f} epoch), loss train={self.state['train_loss']:.4f} val={self.state['val_loss']:.4f} eval->{self.state['eval_loss']:.4f}")
+                self.log(LogFlag.INIT, f"Checkpoint: iter={iter_num} ({epoch:.3f} epoch), loss train={self.state['train_loss']:.4f} val={self.state['val_loss']:.4f} eval->{self.state['eval_loss']:.4f}")
 
-                assert self.config.model.vocab_size == self.train_dataset.get_vocab_size(), f"Model vocab_size ({self.config.model.vocab_size} != Dataset vocab_size ({self.train_dataset.get_vocab_size()})"
+                assert self.config.model.vocab_size == self.train_dataset.get_vocab_size(), f"Model vocab_size ({self.config.model.vocab_size}) != Dataset vocab_size ({self.train_dataset.get_vocab_size()})"
 
             else:
                 self.config.model.vocab_size = self.train_dataset.get_vocab_size()
@@ -235,7 +236,7 @@ class Sample:
 
 
 
-        self.log(LogFlag.INIT, f"Dataset train_path: {self.config.dataset.train_path if self.config.dataset.train_path else 'dummy empty dataset'}, val_path_or_train_split: {self.config.dataset.val_path_or_train_split}, vocab_size: {self.train_dataset.get_vocab_size()}")
+        self.log(LogFlag.INIT, f"Dataset train_path: {self.config.dataset.train_path if self.config.dataset.train_path else 'dummy empty dataset'}, val_path: {self.config.dataset.val_path}, train_split: {self.config.dataset.train_split}, vocab_size: {self.train_dataset.get_vocab_size()}")
 
 
         # model and dataset(s) are now loaded, settle/resolve config options:
@@ -252,10 +253,10 @@ class Sample:
 
         if self.config.sample.start_text is not None:
             self.config.sample.start_text = self.config.sample.start_text.replace("\\n", "\n")
-        if self.config.sample.start_after is not None:
-            self.config.sample.start_after = self.config.sample.start_after.replace("\\n", "\n")
-        if self.config.sample.stop_before is not None:
-            self.config.sample.stop_before = self.config.sample.stop_before.replace("\\n", "\n")
+        if self.config.sample.emit_after is not None:
+            self.config.sample.emit_after = self.config.sample.emit_after.replace("\\n", "\n")
+        if self.config.sample.emit_before is not None:
+            self.config.sample.emit_before = self.config.sample.emit_before.replace("\\n", "\n")
 
 
 
@@ -351,8 +352,8 @@ class Sample:
                                      sample_config.count, sample_config.max_len, 
 
                                      text, 
-                                     start_after=sample_config.start_after,
-                                     stop_before=sample_config.stop_before,
+                                     emit_after=sample_config.emit_after,
+                                     emit_before=sample_config.emit_before,
                                      emit_start=sample_config.emit_start,
 
                                      eot_stop=sample_config.eot_stop, flush=sample_config.flush,
@@ -370,8 +371,8 @@ class Sample:
                                  sample_config.count, sample_config.max_len, 
 
                                  start_text, 
-                                 start_after=sample_config.start_after,
-                                 stop_before=sample_config.stop_before,
+                                 emit_after=sample_config.emit_after,
+                                 emit_before=sample_config.emit_before,
                                  emit_start=sample_config.emit_start,
 
                                  eot_stop=sample_config.eot_stop, flush=sample_config.flush,
@@ -396,8 +397,8 @@ class Sample:
                         count, max_len, 
 
                         start_text,
-                        start_after=None,
-                        stop_before=None,
+                        emit_after=None,
+                        emit_before=None,
                         emit_start=1,
 
                         eot_stop=0, flush=True,
@@ -415,12 +416,12 @@ class Sample:
 
         # don't limit: if flush: count = 1
 
-        if DEB: print(emit_start, start_after, stop_before)
+        if DEB: print(emit_start, emit_after, emit_before)
 
         eot_token = self.train_dataset.get_eot_token()
 
         chars_buffer = [start_text if emit_start else ''] * count
-        emitting = [start_after is None] * count 
+        emitting = [emit_after is None] * count 
         emitted = [False] * count # any emission before?
 
 
@@ -447,11 +448,11 @@ class Sample:
 
                 # should start emitting?
                 if not emitted[ib]: # never emitted, 
-                    if start_after is not None:
+                    if emit_after is not None:
                         # waiting for emit_after_text
                         acc_buffer = chars_buffer[ib] + new_chars_list[ib]
 
-                        if (index := acc_buffer.find(start_after)) != -1: # start emitting!
+                        if (index := acc_buffer.find(emit_after)) != -1: # start emitting!
                             new_chars_list[ib]=acc_buffer[index+1:]
                             chars_buffer[ib]=''
                             emitting[ib]=True
@@ -472,10 +473,10 @@ class Sample:
                     if not emitted[ib]: # not yet emitted
                         emitted[ib]=True
 
-                    if stop_before is not None:
+                    if emit_before is not None:
                         acc_buffer = chars_buffer[ib] + new_chars_list[ib]
 
-                        if (index := acc_buffer.rfind(stop_before)) != -1:
+                        if (index := acc_buffer.rfind(emit_before)) != -1:
                             chars_buffer[ib]=chars_buffer[ib][:index]
                             rem = index - len(acc_buffer) # rem is negative
                             new_chars_list[ib]=new_chars_list[ib][:rem]
@@ -680,21 +681,24 @@ class Sample:
         except KeyError:
             assert False, f"Unknown config value dataset.class_name '{dataset_config.class_name}'"
 
+
+        dataset_config.train_path = dataset_config.train_path.replace(os.sep, '/')
+        if dataset_config.val_path is not None:
+            dataset_config.val_path = dataset_config.val_path.replace(os.sep, '/')
+
         # extra params?
         if dataset_config.params is not None:
-            params = dataset_config.params.replace('\\n', '\n')
+            params = dataset_config.params = dataset_config.params.replace('\\n', '\n')
             kwargs = str_dict_from_str(params)
         else:
             kwargs = {}
 
-        try:
-            val_path_or_train_split = float(dataset_config.val_path_or_train_split)
-        except ValueError:
-            val_path_or_train_split = str(dataset_config.val_path_or_train_split)
 
-        return cls.load_train_val_datasets(dataset_config.train_path,
-                                           val_path_or_train_split,
-                                           block_size,
+        # normalize path to forward slashes
+        return cls.load_train_val_datasets(block_size,
+                                           dataset_config.train_path, dataset_config.train_split,
+                                           dataset_config.val_path,
+                                           
                                            repeat_if_needed=True,
                                            verbose=self.log_mask & LogFlag.INIT,
                                            **kwargs)

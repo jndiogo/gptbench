@@ -105,7 +105,10 @@ def dataset_get_default_config():
     c.setup('class_name', None, str, 'Dataset type id: ' + ','.join(DATASET_CLASS_MAP.keys()))
     
     c.setup('train_path', None, str, 'Train dataset path')
-    c.setup('val_path_or_train_split', '0.9', str, 'Validation dataset, can be of type float or a string. 0..1 float: train_split for validation dataset from train dataset, string: validation dataset path')
+
+    c.setup('train_split', 0.9, float, 'Train dataset split ratio (0..1) for creating a validation dataset. Only used if val_path is unset')
+
+    c.setup('val_path', None, str, 'Validation dataset path. If set, train_split is not used')
 
     c.setup('params', None, str, "String in the form 'name=vale,name=value,...' containing extra parameters for dataset creation")
 

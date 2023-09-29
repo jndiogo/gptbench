@@ -117,6 +117,9 @@ class Train(Sample):
 
         self._last_saved_eval_loss = self.state['eval_loss']
 
+        
+        # ensure model and logs dirs exist
+        self.ensure_path()
 
 
         if self.in_log(LogFlag.CUDA_MEMORY):
