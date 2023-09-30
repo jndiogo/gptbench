@@ -139,8 +139,12 @@ class Sample:
     def get_config(self):
         return copy.deepcopy(self.config)
 
+    def get_trained_sample_count(self):
+        return self.state['n_samples']
 
-
+    def get_trained_iter_count(self):
+        return Trainer.iter_from_sample(self.state['n_samples'], 
+                                        self.config.trainer.batch_size)
 
 
 
@@ -152,7 +156,7 @@ class Sample:
         seed = over_config.get('seed', self.config.seed)
         set_seed(seed, self.log_mask & LogFlag.INIT)
 
-        assert self.config.dataset.has('class_name') and self.config.dataset.has('train_path'), "Need dataset to init. Set config.dataset: class_name and train_path. Or call set_datasets()"
+        assert self.config.dataset.has('class_name') and self.config.dataset.has('train_path'), "Need a dataset to init. Set config.dataset with class_name and train_path. Or call set_datasets()"
 
 
         self._resumed_optimizer_state_dict = None
@@ -238,10 +242,10 @@ class Sample:
 
         self.log(LogFlag.INIT, f"Dataset train_path: {self.config.dataset.train_path if self.config.dataset.train_path else 'dummy empty dataset'}, val_path: {self.config.dataset.val_path}, train_split: {self.config.dataset.train_split}, vocab_size: {self.train_dataset.get_vocab_size()}")
 
+        self.log(LogFlag.INIT, f"Model params: {self.model.get_num_params() * 1e-6:.2f}M")
+
 
         # model and dataset(s) are now loaded, settle/resolve config options:
-       
-        # check sample.start
         if self.config.sample.start_text is not None:
             if not self.train_dataset.is_text_valid(self.config.sample.start_text):
                 self.log(LogFlag.INIT, f"Config sample.start_text is not valid for dataset's vocabulary. Set to None for random start")
@@ -325,43 +329,44 @@ class Sample:
                     print(strlist[0], sep='', end='', flush=True)
                 if islast:
                     print()
-
             else:
                 for c in range(len(strlist)):
                     if c: print_sepline()
                     print(strlist[c])
 
-
         def list_callback(strlist, islast):
             nonlocal dest
-
             dest += strlist
 
 
-        callback = list_callback if isinstance(dest, list) else print_callback
-
         if isinstance(start_text,list):
+
             # multiple start_text: no flush nor multiple count
             sample_config.count = 1
             sample_config.flush = 0
 
-            for i,text in enumerate(start_text):
-                if not isinstance(dest, list) and i: print_sepline()
+            gen_list = self.sample_group_list(sample_config.max_len, 
 
-                self.sample_callback(callback,
-                                     sample_config.count, sample_config.max_len, 
+                                              start_text, 
+                                              emit_after=sample_config.emit_after,
+                                              emit_before=sample_config.emit_before,
+                                              emit_start=sample_config.emit_start,
 
-                                     text, 
-                                     emit_after=sample_config.emit_after,
-                                     emit_before=sample_config.emit_before,
-                                     emit_start=sample_config.emit_start,
+                                              eot_stop=sample_config.eot_stop,
+                                              temp=sample_config.temp, top=sample_config.top,
+                                            
+                                              stop_asap=stop_asap)
 
-                                     eot_stop=sample_config.eot_stop, flush=sample_config.flush,
-                                     temp=sample_config.temp, top=sample_config.top,                              
-                                     
-                                     stop_asap=stop_asap)
+            if isinstance(dest, list):
+                dest[:] = gen_list
+            else:
+                print_callback(gen_list)
 
         else:
+
+
+            callback = list_callback if isinstance(dest, list) else print_callback
+
 
             if sample_config.count > 1 or isinstance(dest, list):
                 # count > 1: no flush (or big confusion)
@@ -381,9 +386,6 @@ class Sample:
                                  stop_asap=stop_asap)
 
 
-
-
-
         # restore saved config
         self.config.sample = saved_sample_config
 
@@ -391,10 +393,83 @@ class Sample:
 
 
 
+
+    @torch.no_grad()
+    def sample_group_list(self, 
+                          max_len, 
+
+                          start_text_list,
+                          emit_after=None,
+                          emit_before=None,
+                          emit_start=1,
+
+                          eot_stop=0,
+
+                          temp=1.0, top=0.0,
+                           
+                          stop_asap=None):
+
+        """ Split start_text_list into same sized batches, generate each one then asseble back in order """
+
+        assert isinstance(start_text_list,list), "start_text_list must be a list of strings"
+
+        # index,text to later restore order
+        txl = [[i,s] for i,s in enumerate(start_text_list)]
+        
+        # split into same sized buckets
+        ssb = {}
+        for t in txl:
+            lt = len(t[1])
+            if lt not in ssb:
+                ssb[lt]=[]
+            ssb[lt].append(t)
+
+        def list_callback(strlist, islast):
+            nonlocal dest
+            dest += strlist
+
+        sample_config = self.config.sample
+
+        for l,lst in ssb.items():
+
+            dest=[]
+
+            start_lst = [t[1] for t in lst]
+
+            self.sample_callback(list_callback,
+                                 sample_config.count, sample_config.max_len, 
+
+                                 start_lst, 
+                                 emit_after=sample_config.emit_after,
+                                 emit_before=sample_config.emit_before,
+                                 emit_start=sample_config.emit_start,
+
+                                 eot_stop=sample_config.eot_stop, flush=sample_config.flush,
+                                 temp=sample_config.temp, top=sample_config.top,                              
+                                 
+                                 stop_asap=stop_asap)
+
+            for i, out in enumerate(dest):
+                lst[i].append(out)
+
+        #print(ssb)
+
+        # reorder by indexes to return in the right order
+        out = [''] * len(start_text_list)
+
+        for lst in ssb.values():
+            for s in lst:
+                out[s[0]] = s[2]
+
+        return out
+
+
+
+
     @torch.no_grad()
     def sample_callback(self, 
                         chars_callback,
-                        count, max_len, 
+                        repeat_count, max_len, 
 
                         start_text,
                         emit_after=None,
@@ -416,20 +491,32 @@ class Sample:
 
         # don't limit: if flush: count = 1
 
-        if DEB: print(emit_start, emit_after, emit_before)
-
         eot_token = self.train_dataset.get_eot_token()
 
-        chars_buffer = [start_text if emit_start else ''] * count
-        emitting = [emit_after is None] * count 
-        emitted = [False] * count # any emission before?
+        if isinstance(start_text,list):
+            repeat_count = 1
+        else:
+            assert isinstance(start_text,str), "start_text must be an str or str list"
+            start_text=[start_text] * repeat_count
+
+        text_count = len(start_text)
+
+        if emit_start:
+            chars_buffer = start_text
+        else:
+            chars_buffer = [''] * text_count
+
+        emitting = [emit_after is None] * text_count
+        emitted = [False] * text_count # any emission before?
+
+        if DEB: print(start_text, text_count, repeat_count, emit_start, emit_after, emit_before)
 
 
         def emit_callback(idx, islast):
 
             nonlocal chars_buffer, emitting, emitted
 
-            # idx.shape=(count,1)
+            # idx.shape=(text_count,1)
             idx=idx.numpy(force=True)
 
             b=idx.shape[0]
@@ -506,11 +593,21 @@ class Sample:
 
         self.model.eval()
 
+        ix = torch.empty((text_count,len(start_text[0])), dtype=torch.long)
+
+        for i,txt in enumerate(start_text):
+            ix[i] = torch.tensor(self.train_dataset.encode(txt), dtype=torch.long)
+
+        ix = ix.to(self.model.device)
+
+
+        """
         ix = self.train_dataset.encode(start_text)
         x = torch.tensor(ix, dtype=torch.long).to(self.model.device)
         x = x.repeat([count, 1])
+        """
 
-        y = self.model.generate(x, max_len, temperature=temp, do_sample=True, top=top, 
+        y = self.model.generate(ix, max_len, temperature=temp, do_sample=True, top=top, 
                                 token_callback=emit_callback,
                                 stop_asap=stop_asap)
 
@@ -520,8 +617,6 @@ class Sample:
 
 
         return y
-
-
 
 
 
@@ -729,8 +824,8 @@ class Sample:
         os.makedirs(self.path + LOG_DIR, exist_ok=True)
 
 
-    def path_save(self, filename, text):
-        with open(os.path.join(self.path, filename), 'w', encoding='utf-8') as f:
+    def path_append(self, filename, text, clear=False):
+        with open(os.path.join(self.path, filename), 'w' if clear else 'a', encoding='utf-8') as f:
             f.write(text)
 
 

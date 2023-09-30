@@ -225,8 +225,8 @@ class GPT(nn.Module):
             param_dict = {pn: p for pn, p in self.named_parameters()}
             inter_params = decay & no_decay
             union_params = decay | no_decay
-            assert len(inter_params) == 0, "parameters %s made it into both decay/no_decay sets!" % (str(inter_params), )
-            assert len(param_dict.keys() - union_params) == 0, "parameters %s were not separated into either decay/no_decay set!" \
+            assert len(inter_params) == 0, "Parameters %s made it into both decay/no_decay sets!" % (str(inter_params), )
+            assert len(param_dict.keys() - union_params) == 0, "Parameters %s were not separated into either decay/no_decay set!" \
                                                         % (str(param_dict.keys() - union_params), )
 
             # create the pytorch optimizer object
@@ -236,7 +236,7 @@ class GPT(nn.Module):
             ]
             optimizer = torch.optim.AdamW(optim_groups, lr=trainer_config.learning_rate, betas=(trainer_config.adamw_beta1,trainer_config.adamw_beta2))
         else:
-            assert False, f"unknown optimizer trainer.optimizer={trainer_config.optimizer}"
+            assert False, f"Unknown optimizer trainer.optimizer={trainer_config.optimizer}"
 
         return optimizer
 
@@ -268,7 +268,8 @@ class GPT(nn.Module):
         
 
     @torch.no_grad()
-    def generate(self, idx, max_new_tokens, temperature=1.0, do_sample=False, top=0, 
+    def generate(self, idx, 
+                 max_new_tokens, temperature=1.0, do_sample=False, top=0, 
                  token_callback=None, stop_asap=None):
         """
         Take a conditioning sequence of indices idx (LongTensor of shape (b,t)) and complete

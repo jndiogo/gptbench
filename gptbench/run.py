@@ -2,7 +2,7 @@
 
 """
 
-import os, sys, copy
+import os, sys, copy, datetime
 
 from .sample import Sample
 from .train import Train
@@ -60,11 +60,20 @@ def config_run(config, sys_argv = None):
         assert False, f"Unknown init '{init}'"
 
 
-    if sys_argv is not None and init != 'resume': # save argv cmd
-        do.ensure_path()        
-        cmd = ' '.join(sys_argv)
-        text = cmd + '\n\nConfig:\n' + str(do.config)
-        do.path_save('init.txt', text)
+    if sys_argv is not None: # save argv into run.log
+        do.ensure_path()
+
+        text = ''
+
+        if init != 'resume':
+            text += 'Initial config:\n' + do.config.dump(1) + '\n\n'
+
+        now = datetime.datetime.now()
+
+        text += now.strftime("%Y/%m/%d %H:%M:%S") + ':\n' + ' '.join(sys_argv) + '\n\n'
+
+        do.path_append('run.log', text, clear=init != 'resume')
+
 
     # train or sample
     if mode == 'train':
