@@ -133,6 +133,9 @@ class CharDataset(Dataset):
     def get_src_data(self):
         return self.data
 
+    def get_src_sample(self, index):
+        return self.data[index:index + self.block_size]
+
     def get_data(self): 
         return self.data
 
@@ -370,6 +373,36 @@ class PaddedLineCharDataset(Dataset):
     def get_src_data(self):
         return self.src_data
 
+    def sample_split(self, start_index, stop_index,
+                     sep, sep_included):
+
+        """ Split samples by sep char into two lists a and b. sep_included: -1 at end of a, 1 at beginning of b, 0 not included """
+
+        alist=[]; blist=[]
+
+        for index in range(start_index, stop_index):
+            s = self.data[index]
+            l = s.split(sep, maxsplit=1)            
+            assert len(l) == 2, f"Unable to split: sep char not found in dataset entry '{s}'"
+
+            a,b = l
+            if sep_included:
+                if sep_included==-1:
+                    a += sep
+                else:
+                    b = sep + b
+
+            alist.append(a)
+            blist.append(b)
+
+        return alist,blist
+
+
+
+
+
+
+
     def get_data(self): 
         return self.data
 
@@ -396,7 +429,6 @@ class PaddedLineCharDataset(Dataset):
 
     def get_eot_token(self):
         return None
-
 
     def encode(self, text):
         return [self.stoi[id] for id in text]
@@ -466,7 +498,7 @@ class PaddedLineCharDataset(Dataset):
         if ll+n_zerozero < self.block_size: # mark all after last y==0 to be -1 to not be accounted for loss
             y[ll+n_zerozero:] = -1
         """
-        
+
         return x, y
 
 

@@ -165,14 +165,11 @@ def str_dict_from_str(st):
     pairs = st.split(',')
     for kv in pairs:
 
-        keyval = kv.split('=')
-        l = len(keyval)
-        if l >= 2: # take care of accepting multiple '=' like -start="1+1=?"
-            keyval[1] = '='.join(keyval[1:])
-            keyval = keyval[:2]
+        keyval = kv.split('=', maxsplit=1)
+        assert len(keyval) == 2, "Must be in the form name=value"
 
-            key, val = keyval # unpack
-            val = val.replace('\0','\,')
+        key, val = keyval # unpack
+        val = val.replace('\0','\,')
 
         out[key] = val
 

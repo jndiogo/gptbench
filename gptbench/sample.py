@@ -55,6 +55,8 @@ class Sample:
         c.setup('temp',  1., float, "Temperature")
 
 
+        c.setup('max_batch_size', None, int, "Maximum batch size when inferring in parallel with mltiple start text. None means no limit which produce out-of-memory errors in larger models")
+
         c.setup('multiline_prompt', False, bool, 'On prompt mode: input multiple lines until a Ctrl+D or Ctrl+Z (in Windows)')
 
         return c
@@ -291,7 +293,6 @@ class Sample:
         """
         stop_asap=[False] - when set to True, sample will stop and return.
 
-        over_sample_config: partial config to override config.sample settings.
         over_sample_config_kwargs: key values to override config.sample settings (and any over_sample_config).
 
         """
@@ -340,10 +341,7 @@ class Sample:
 
 
         if isinstance(start_text,list):
-
-            # multiple start_text: no flush nor multiple count
-            sample_config.count = 1
-            sample_config.flush = 0
+            # config's count and flush are ignored in sample_group_list: count=1 and flush=False
 
             gen_list = self.sample_group_list(sample_config.max_len, 
 
@@ -354,6 +352,8 @@ class Sample:
 
                                               eot_stop=sample_config.eot_stop,
                                               temp=sample_config.temp, top=sample_config.top,
+
+                                              max_batch_size=sample_config.max_batch_size,
                                             
                                               stop_asap=stop_asap)
 
@@ -393,6 +393,237 @@ class Sample:
 
 
 
+    @torch.no_grad()
+    def measure(self, questions, answers, 
+                test_fn=None, # None means case sensitive string compare, returning 1. or 0.
+                stop_asap=None, 
+                **over_sample_config_kwargs):
+
+        """
+        stop_asap=[False] - when set to True, sample will stop and return.
+
+        over_sample_config_kwargs: key values to override config.sample settings (and any over_sample_config).
+
+        """
+
+        assert isinstance(questions, list), "questions must be a list"
+        if answers is not None:
+            assert isinstance(answers, list) and len(questions) == len(answers), "answers must be a list and same size as questions"
+
+
+        # save sample config so that any overrides are local here
+        saved_sample_config = copy.copy(self.config.sample)
+
+        # override existing config.sample keys from kwargs
+        self.config.sample.update(over_sample_config_kwargs)
+
+        sample_config = self.config.sample
+
+        gen_list = self.sample_group_list(sample_config.max_len, 
+
+                                          questions, 
+                                          emit_after=sample_config.emit_after,
+                                          emit_before=sample_config.emit_before,
+                                          emit_start=False,
+
+                                          eot_stop=sample_config.eot_stop,
+                                          temp=sample_config.temp, top=sample_config.top,
+
+                                          max_batch_size=sample_config.max_batch_size,
+                                        
+                                          stop_asap=stop_asap)
+
+        if stop_asap is not None and stop_asap[0]: # cancelled
+            self.config.sample = saved_sample_config
+            return None
+
+        #print(gen_list)
+
+        results = []
+
+        if test_fn is None:
+            def case_sensitive_equal(_question, answer, gen):
+                return float(str(answer) == str(gen))
+
+            assert answers is not None, "To use default test_fn please provide the answers list"
+
+            test_fn = case_sensitive_equal
+
+
+        for i in range(len(questions)):
+            res = test_fn(questions[i],
+                           None if answers is None else answers[i],
+                           gen_list[i])
+
+            results.append(res)
+
+        # restore saved config
+        self.config.sample = saved_sample_config
+
+        return results
+
+
+
+
+    def measure_accuracy(self, questions, answers, 
+                         test_fn=None, # None means case sensitive string compare, returning 1. or 0.
+                         stop_asap=None, 
+                         **over_sample_config_kwargs):
+
+        results = self.measure(questions, answers, test_fn, stop_asap, **over_sample_config_kwargs)
+
+        return sum(results) / len(results)
+
+
+
+
+
+
+
+
+
+    @torch.no_grad()
+    def prompt(self,
+               **over_sample_config_kwargs):
+
+        """ """
+
+        allowed_cmds = [
+        'seed',
+        'help',
+        'quit',
+        'config',
+
+        'count',
+        'max_len',
+
+        'flush',
+        'eot_stop',
+        'top',
+        'temp',
+        'multiline_prompt',
+        ]
+
+
+        print("Prompt mode: press Enter (single line mode), or Ctrl+D / Ctrl+Z (multiline mode) to submit starting text. Enter -help for available commands.")
+
+
+        # save sample config so that any overrides are local to this function
+        saved_sample_config = copy.copy(self.config.sample)
+
+
+        # override existing config.sample keys from kwargs
+        self.config.sample.update(over_sample_config_kwargs)
+
+
+        sample_config = self.config.sample
+        sample_config.flush = True #  this is setting global config
+        del sample_config.start_text # we'll provide this directly
+
+
+        stop_asap = [False]
+
+        def signal_handler(signal, frame):
+            nonlocal stop_asap
+            print('\n<stopping>')
+            stop_asap[0] = True
+
+        original_sigint = signal.getsignal(signal.SIGINT)
+
+
+        def print_help():
+            print("Enter sampling start text or a command in the form -cmd or -cmd=val. Possible commands: ", ['-' + c for c in allowed_cmds], "\n Press Ctrl+C once to stop generation.")
+
+        first = True
+        while True:
+            p = ''
+            if sample_config.multiline_prompt:
+                prompt='V\n'
+            else:
+                prompt='> '
+
+            while True:
+                try:
+                    p += input(prompt)
+                except EOFError:
+                    break
+
+                if not sample_config.multiline_prompt:
+                    break
+                else:
+                    p += '\n'
+                    prompt=''
+
+            if not len(p):
+                continue
+
+
+            if p.startswith('-'): # a command
+                p = p.strip()
+                cmds = p.split(' ')
+
+                quit = False
+                for c in cmds:
+                    if c.startswith('-'):
+                        c = c[1:]
+                        if c[:1] == '-': c = c[1:] # strip eventual second -
+
+                    if '=' in c:
+                        kv = list(c.split('='))
+                    else: # -cmd -> -cmd=1
+                        kv = [c,'1']
+
+                    k,v=kv
+
+                    if k == 'help' or k not in allowed_cmds:
+                        print_help()
+                        break
+
+                    elif k == 'quit':
+                        print("Quitting")
+                        quit = True
+                        break
+
+                    elif k == 'seed':
+                        set_seed(int(v))
+
+                    elif k == 'config':
+                        print("Config:")
+                        print(self.config.dump(int(v)))
+
+                    else:
+                        cmd_list = [ '-' + k + '=' + v ]
+                        sample_config.update_from_args(cmd_list)
+
+                if quit:
+                    break
+            else:
+                start_text = p.replace("\\n", "\n")
+
+                stop_asap = [False]
+                signal.signal(signal.SIGINT, signal_handler)
+
+                self.sample(start_text, stop_asap=stop_asap, **sample_config.to_dict())
+
+                signal.signal(signal.SIGINT, original_sigint)
+
+                print()
+
+
+
+        # restore saved config
+        self.config.sample = saved_sample_config
+
+
+
+
+
+
+
+
+
+
+
 
     @torch.no_grad()
     def sample_group_list(self, 
@@ -401,11 +632,13 @@ class Sample:
                           start_text_list,
                           emit_after=None,
                           emit_before=None,
-                          emit_start=1,
+                          emit_start=True,
 
                           eot_stop=0,
 
                           temp=1.0, top=0.0,
+
+                          max_batch_size=None,
                            
                           stop_asap=None):
 
@@ -428,29 +661,37 @@ class Sample:
             nonlocal dest
             dest += strlist
 
-        sample_config = self.config.sample
+        max_batch_size = max_batch_size if max_batch_size is not None else int(1e10)
 
         for l,lst in ssb.items():
 
-            dest=[]
-
             start_lst = [t[1] for t in lst]
 
-            self.sample_callback(list_callback,
-                                 sample_config.count, sample_config.max_len, 
+            # split in max_batch_sizes
+            base_index = 0            
+            while len(start_lst):
+                part_lst = start_lst[:max_batch_size]
+                start_lst = start_lst[max_batch_size:]
 
-                                 start_lst, 
-                                 emit_after=sample_config.emit_after,
-                                 emit_before=sample_config.emit_before,
-                                 emit_start=sample_config.emit_start,
+                dest=[]
 
-                                 eot_stop=sample_config.eot_stop, flush=sample_config.flush,
-                                 temp=sample_config.temp, top=sample_config.top,                              
-                                 
-                                 stop_asap=stop_asap)
+                self.sample_callback(list_callback,
+                                     1, max_len, 
 
-            for i, out in enumerate(dest):
-                lst[i].append(out)
+                                     part_lst, 
+                                     emit_after=emit_after,
+                                     emit_before=emit_before,
+                                     emit_start=emit_start,
+
+                                     eot_stop=eot_stop, flush=False,
+                                     temp=temp, top=top,                              
+                                     
+                                     stop_asap=stop_asap)
+
+                for i, out in enumerate(dest):
+                    lst[base_index + i].append(out)
+
+                base_index += len(part_lst)
 
         #print(ssb)
 
@@ -462,6 +703,10 @@ class Sample:
                 out[s[0]] = s[2]
 
         return out
+
+
+
+
 
 
 
@@ -625,137 +870,25 @@ class Sample:
 
 
 
-    @torch.no_grad()
-    def prompt(self,
-               **over_sample_config_kwargs):
-
-        """ """
-
-        allowed_cmds = [
-        'seed',
-        'help',
-        'quit',
-        'config',
-
-        'count',
-        'max_len',
-
-        'flush',
-        'eot_stop',
-        'top',
-        'temp',
-        'multiline_prompt',
-        ]
 
 
-        print("Prompt mode: press Enter (single line mode), or Ctrl+D / Ctrl+Z (multiline mode) to submit starting text. Enter -help for available commands.")
+    def ensure_path(self):
+        # setup_path: create the work directory if it doesn't already exist
+        #os.makedirs(self.path, exist_ok=True)
+        os.makedirs(self.path + LOG_DIR, exist_ok=True)
 
 
-        # save sample config so that any overrides are local to this function
-        saved_sample_config = copy.copy(self.config.sample)
+    def path_append(self, filename, text, clear=False):
+        with open(os.path.join(self.path, filename), 'w' if clear else 'a', encoding='utf-8') as f:
+            f.write(text)
 
 
-        # override existing config.sample keys from kwargs
-        self.config.sample.update(over_sample_config_kwargs)
+    def in_log(self, log_mask: LogFlag):
+        return bool(log_mask & self.log_mask)
 
-
-        sample_config = self.config.sample
-        sample_config.flush = True #  this is setting global config
-        del sample_config.start_text # we'll provide this directly
-
-
-        stop_asap = [False]
-
-        def signal_handler(signal, frame):
-            nonlocal stop_asap
-            print('\n<stopping>')
-            stop_asap[0] = True
-
-        original_sigint = signal.getsignal(signal.SIGINT)
-
-
-        def print_help():
-            print("Enter sampling start text or a command in the form -cmd or -cmd=val. Possible commands: ", ['-' + c for c in allowed_cmds], "\n Press Ctrl+C once to stop generation.")
-
-        first = True
-        while True:
-            p = ''
-            if sample_config.multiline_prompt:
-                prompt='V\n'
-            else:
-                prompt='> '
-
-            while True:
-                try:
-                    p += input(prompt)
-                except EOFError:
-                    break
-
-                if not sample_config.multiline_prompt:
-                    break
-                else:
-                    p += '\n'
-                    prompt=''
-
-            if not len(p):
-                continue
-
-
-            if p.startswith('-'): # a command
-                p = p.strip()
-                cmds = p.split(' ')
-
-                quit = False
-                for c in cmds:
-                    if c.startswith('-'):
-                        c = c[1:]
-                        if c[:1] == '-': c = c[1:] # strip eventual second -
-
-                    if '=' in c:
-                        kv = list(c.split('='))
-                    else: # -cmd -> -cmd=1
-                        kv = [c,'1']
-
-                    k,v=kv
-
-                    if k == 'help' or k not in allowed_cmds:
-                        print_help()
-                        break
-
-                    elif k == 'quit':
-                        print("Quitting")
-                        quit = True
-                        break
-
-                    elif k == 'seed':
-                        set_seed(int(v))
-
-                    elif k == 'config':
-                        print("Config:")
-                        print(self.config.dump(int(v)))
-
-                    else:
-                        cmd_list = [ '-' + k + '=' + v ]
-                        sample_config.update_from_args(cmd_list)
-
-                if quit:
-                    break
-            else:
-                start_text = p.replace("\\n", "\n")
-
-                stop_asap = [False]
-                signal.signal(signal.SIGINT, signal_handler)
-
-                self.sample(start_text, stop_asap=stop_asap, **sample_config.to_dict())
-
-                signal.signal(signal.SIGINT, original_sigint)
-
-                print()
-
-
-
-        # restore saved config
-        self.config.sample = saved_sample_config
+    def log(self, log_mask: LogFlag, *args, **kwargs):
+        if self.in_log(log_mask):
+            print(*args, **kwargs)
 
 
 
@@ -816,24 +949,4 @@ class Sample:
 
     def _check_pretrained_type(self, type):
         assert type in ['gpt2', 'gpt2-medium', 'gpt2-large', 'gpt2-xl'], 'init type must be one of: new, resume, gpt2, gpt2-medium, gpt2-large, gpt2-xl'
-
-
-    def ensure_path(self):
-        # setup_path: create the work directory if it doesn't already exist
-        #os.makedirs(self.path, exist_ok=True)
-        os.makedirs(self.path + LOG_DIR, exist_ok=True)
-
-
-    def path_append(self, filename, text, clear=False):
-        with open(os.path.join(self.path, filename), 'w' if clear else 'a', encoding='utf-8') as f:
-            f.write(text)
-
-
-    def in_log(self, log_mask: LogFlag):
-        return bool(log_mask & self.log_mask)
-
-    def log(self, log_mask: LogFlag, *args, **kwargs):
-        if self.in_log(log_mask):
-            print(*args, **kwargs)
-
 

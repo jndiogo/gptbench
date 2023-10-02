@@ -137,6 +137,9 @@ class GPT2TokensDataset(Dataset):
         """ self.data is a list of integers 0..get_vocab_size()-1 """
         return self.decode(self.data)
 
+    def get_src_sample(self, index):
+        return self.decode(self.data[index:index + self.block_size])
+
     def get_data(self): 
         return self.data
 

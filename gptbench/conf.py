@@ -97,13 +97,10 @@ class Conf():
         d = dict()
         for arg in args_list:
 
-            keyval = arg.split('=')
+            keyval = arg.split('=', maxsplit=1)
             l = len(keyval)
             if l < 2: # -resume -> -resume=1
                 keyval.append(1)
-            elif l > 2: # take care of accepting multiple '=' like -start="1+1=?"
-                keyval[1] = '='.join(keyval[1:])
-                keyval = keyval[:2]
 
             key, val = keyval # unpack
 
