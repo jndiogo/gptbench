@@ -230,7 +230,7 @@ class Train(Sample):
                 train.log(LogFlag.TRAIN_EVAL, f"==> Saving model at iter={iter_num}, eval loss->{eval_loss:.4f} ")
 
                 # @ATTN: trainer.sample_num is already the sample num of next batch, which is okay
-                train.save_checkpoint()
+                train.save()
 
                 train._last_saved_eval_loss = eval_loss
 
@@ -260,23 +260,20 @@ class Train(Sample):
 
 
    # -----------------------------------------------------------------------------
-    def save_checkpoint(self, name=None, suffix=None):
+    def save(self, name=None):
+
+        assert self.trainer is not None, "Must train at least once before saving"
 
         if name is not None:
-            path = os.path.join(work_dir, name, '').replace(os.sep, '/')
-        else:
-            path = self.path
+            self.set_name(name)
 
-        if suffix is not None:
-            path += suffix
-
-        self._ensure_path(path)
+        self._ensure_path()
 
         config = self.config.to_dict()
         # don't include seed
         del config['seed']
 
-        checkpoint_save(path, 
+        checkpoint_save(self.path, 
                         self.model, self.trainer.optimizer,
                         self.state,
                         config

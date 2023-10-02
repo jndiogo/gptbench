@@ -65,26 +65,16 @@ class Sample:
 
     def __init__(self, name=DEFAULT_NAME, work_dir=DEFAULT_WORK_DIR, log_mask=LogFlag.ALL):
 
-        self.name = name
+        self.work_dir = work_dir
         self.log_mask = log_mask
 
-        self.config = full_default_config()
-
-        self.state = { 'n_samples': 0, # number of trained samples so far
-                       'train_loss': float('inf'), # last evaluated train dataset loss 
-                       'val_loss': float('inf'), # last evaluated validation dataset loss
-                       'eval_loss': float('inf') # last evaluation loss calculated from train_loss and val_loss according to eval_type
-                       }
-
+        self.reset(name)
 
         self.model = None
         self.trainer = None
 
         self.train_dataset = None
         self.val_dataset = None
-
-        self.path = os.path.join(work_dir, self.name, '').replace(os.sep, '/')
-        self.log_path = os.path.join(self.path, LOG_DIR, '').replace(os.sep, '/')
 
         self._resumed_optimizer_state_dict = None
         self._can_train = False
@@ -122,19 +112,24 @@ class Sample:
 
 
 
-    def init_new(self, over_config):
-        self._init('new', over_config)
+    def init_new(self, over_config, name=None):
+        self._init('new', over_config, name)
 
-    def init_pretrained(self, init_type, over_config):
+    def init_pretrained(self, init_type, over_config, name=None):
         self._check_pretrained_type(init_type)
-        self._init(init_type, over_config)
-
-    def init_resume(self, over_config):
-        self._init('resume', over_config)
+        self._init(init_type, over_config, name)
 
 
-    def can_resume(self):
-        return checkpoint_exists(self.path)
+    def load(self, over_config=None, name=None):
+        self._init('resume', over_config, name)
+
+    def can_load(self, name=None):
+        if name is not None:
+            path = os.path.join(self.work_dir, name, '').replace(os.sep, '/')
+        else:
+            path = self.path
+
+        return checkpoint_exists(path)
 
 
 
@@ -151,8 +146,38 @@ class Sample:
 
 
 
+    def set_name(self, name):
+        self.name = name
+        self.path = os.path.join(self.work_dir, self.name, '').replace(os.sep, '/')
+        self.log_path = os.path.join(self.path, LOG_DIR, '').replace(os.sep, '/')
+
+
+    def reset(self, name=None, reset_config=True):
+        if name is None:
+            name=DEFAULT_NAME
+        self.set_name(name)
+
+        if reset_config:
+            self.config = full_default_config()
+
+        self.state = { 'n_samples': 0, # number of trained samples so far
+                       'train_loss': float('inf'), # last evaluated train dataset loss 
+                       'val_loss': float('inf'), # last evaluated validation dataset loss
+                       'eval_loss': float('inf') # last evaluation loss calculated from train_loss and val_loss according to eval_type
+                       }
+
+
     # -----------------------------------------------------------------------------
-    def _init(self, init_type, over_config):
+    def _init(self, init_type, over_config=None, name=None):
+
+        self.reset(name if name is not None else self.name, reset_config=False)
+
+        if over_config is None:
+            over_config = empty_config()
+
+        if name is not None:
+            self.set_name(name)
+
 
         # set seed
         seed = over_config.get('seed', self.config.seed)
@@ -948,14 +973,8 @@ class Sample:
 
 
 
-    def _ensure_path(self, folder_path=None):
+    def _ensure_path(self):
         """ Create work and log directories if not already existing """
-
-        if folder_path is None:
-            path = self.path + LOG_DIR
-        else:
-            path = folder_path + '/' + LOG_DIR
-
-        os.makedirs(path, exist_ok=True)
+        os.makedirs(self.path + LOG_DIR, exist_ok=True)
 
 

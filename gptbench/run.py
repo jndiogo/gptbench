@@ -54,7 +54,7 @@ def config_run(config, sys_argv = None):
         do.init_pretrained(init, config)
 
     elif init == 'resume':
-        do.init_resume(config)
+        do.load(config)
 
     else:
         assert False, f"Unknown init '{init}'"
