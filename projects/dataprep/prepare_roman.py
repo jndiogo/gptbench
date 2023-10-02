@@ -65,6 +65,7 @@ if __name__ == '__main__':
     parser.add_argument('--gpt2', '-g', action='store_true', help="encode as gpt2 tokens")
     parser.add_argument('--sep', '-p', type=str, default='\\n', help="line separator")
     parser.add_argument('--split', '-s', type=float, default=1., help="split name.ext into name.train.ext and name.val.ext at this ratio of total entries")
+    parser.add_argument('--rev', '-r', action='store_true', help="create roman=decimal")
 
     
     args = parser.parse_args()
@@ -87,7 +88,10 @@ if __name__ == '__main__':
 
         rom = roman_from_int(n)
 
-        dest.append( f"{n}={rom}" )
+        if args.rev:
+            dest.append( f"{rom}={n}" )
+        else:
+            dest.append( f"{n}={rom}" )
 
         index += 1
 

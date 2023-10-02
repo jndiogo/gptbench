@@ -275,7 +275,7 @@ class PaddedLineCharDataset(Dataset):
 
             assert train_split > 0. and train_split <= 1., "0 < train split <= 1"
 
-            split_index = int(len(data) * train_split)
+            split_index = PaddedLineCharDataset.line_start_char_from_ratio(data, line_sep_char=line_sep_char, line_ratio=train_split)
 
             train = PaddedLineCharDataset(block_size, data=data[:split_index],
                                 line_sep_char=line_sep_char, pad_char=pad_char, shuffle=shuffle,
@@ -320,6 +320,32 @@ class PaddedLineCharDataset(Dataset):
             chars.remove(line_sep_char)
 
         return sorted(chars)
+
+    @staticmethod
+    def line_start_char_from_ratio(data, line_sep_char, line_ratio):
+        """ Return the char position ratio that matches the beginning of a line"""
+
+        total_chars = len(data)
+        if line_ratio >= 1.:
+            return total_chars
+
+        total_lines = data.count(line_sep_char) + 1
+        target_line_index = int(line_ratio * total_lines)
+        char_pos=0
+        l=0
+        while True:
+            if l == target_line_index:
+                break
+
+            pos = data.find('\n', char_pos)
+            if pos == -1:
+                break
+
+            char_pos = pos+1
+            l+=1
+
+        return char_pos
+
 
 
     def __init__(self, block_size, data=None, data_path=None,
@@ -480,6 +506,7 @@ class PaddedLineCharDataset(Dataset):
 
 
     def __getitem__(self, idx):
+
         line = self.data[idx]
         # encode every character to an integer
         dix = self.encode(line)

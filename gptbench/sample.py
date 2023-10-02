@@ -871,13 +871,6 @@ class Sample:
 
 
 
-
-    def ensure_path(self):
-        # setup_path: create the work directory if it doesn't already exist
-        #os.makedirs(self.path, exist_ok=True)
-        os.makedirs(self.path + LOG_DIR, exist_ok=True)
-
-
     def path_append(self, filename, text, clear=False):
         with open(os.path.join(self.path, filename), 'w' if clear else 'a', encoding='utf-8') as f:
             f.write(text)
@@ -949,4 +942,20 @@ class Sample:
 
     def _check_pretrained_type(self, type):
         assert type in ['gpt2', 'gpt2-medium', 'gpt2-large', 'gpt2-xl'], 'init type must be one of: new, resume, gpt2, gpt2-medium, gpt2-large, gpt2-xl'
+
+
+
+
+
+
+    def _ensure_path(self, folder_path=None):
+        """ Create work and log directories if not already existing """
+
+        if folder_path is None:
+            path = self.path + LOG_DIR
+        else:
+            path = folder_path + '/' + LOG_DIR
+
+        os.makedirs(path, exist_ok=True)
+
 

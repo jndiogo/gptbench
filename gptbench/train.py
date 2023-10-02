@@ -119,7 +119,7 @@ class Train(Sample):
 
         
         # ensure model and logs dirs exist
-        self.ensure_path()
+        self._ensure_path()
 
 
         if self.in_log(LogFlag.CUDA_MEMORY):
@@ -260,17 +260,23 @@ class Train(Sample):
 
 
    # -----------------------------------------------------------------------------
-    def save_checkpoint(self):
+    def save_checkpoint(self, name=None, suffix=None):
 
-        from .sample import Sample
+        if name is not None:
+            path = os.path.join(work_dir, name, '').replace(os.sep, '/')
+        else:
+            path = self.path
 
-        self.ensure_path()
+        if suffix is not None:
+            path += suffix
+
+        self._ensure_path(path)
 
         config = self.config.to_dict()
         # don't include seed
         del config['seed']
 
-        checkpoint_save(self.path, 
+        checkpoint_save(path, 
                         self.model, self.trainer.optimizer,
                         self.state,
                         config
