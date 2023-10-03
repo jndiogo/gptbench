@@ -115,11 +115,10 @@ class Train(Sample):
         else:
             self._sample_period = self.config.train.sample_period
 
-        self._last_saved_eval_loss = self.state['eval_loss']
-
         
         # ensure model and logs dirs exist
-        self._ensure_path()
+        if self.config.train.eval_save_loss:
+            self._ensure_path()            
 
 
         if self.in_log(LogFlag.CUDA_MEMORY):
@@ -133,11 +132,11 @@ class Train(Sample):
                                    self.train_dataset, 
                                    self.model, 
                                    start_sample_num=self.state['n_samples'],
-                                   optimizer=None, optimizer_state_dict=self._resumed_optimizer_state_dict)
+                                   optimizer=None, optimizer_state_dict=self._loaded_optimizer_state_dict)
 
-            if self._resumed_optimizer_state_dict is not None:
-                self.log(LogFlag.INIT , "Resuming optimizer state")
-                self._resumed_optimizer_state_dict = None # consummed!
+            if self._loaded_optimizer_state_dict is not None:
+                self.log(LogFlag.INIT , "Resumed optimizer state")
+                self._loaded_optimizer_state_dict = None # consummed!
 
 
         self.log(LogFlag.INIT, f"Batches per epoch: {int(self.trainer.batches_for_epoch())}")
@@ -178,13 +177,6 @@ class Train(Sample):
     def default_batch_end_callback(trainer, train):
 
         """
-        train callback state:
-            state
-
-            _eval_period
-            _log_period
-            _sample_period
-            _last_saved_eval_loss
         """
 
         train_config = train.config.train
@@ -224,15 +216,13 @@ class Train(Sample):
             train.log(LogFlag.TRAIN_EVAL, f"iter {iter_num} ({trainer.epoch_from_sample_num():.3f} epoch): loss train={train_loss:.4f}, val={val_loss:.4f}, eval->{eval_loss:.4f}")
 
 
-            if (train_config.eval_save_checkpt == 1 and eval_loss < train._last_saved_eval_loss) \
+            if (train_config.eval_save_checkpt == 1 and eval_loss < train.last_saved_state['eval_loss']) \
                or train_config.eval_save_checkpt == 2: # save a checkpoint
 
                 train.log(LogFlag.TRAIN_EVAL, f"==> Saving model at iter={iter_num}, eval loss->{eval_loss:.4f} ")
 
                 # @ATTN: trainer.sample_num is already the sample num of next batch, which is okay
                 train.save()
-
-                train._last_saved_eval_loss = eval_loss
 
 
             if train_config.eval_save_loss is not None:
@@ -262,7 +252,13 @@ class Train(Sample):
    # -----------------------------------------------------------------------------
     def save(self, name=None):
 
-        assert self.trainer is not None, "Must train at least once before saving"
+        if self.trainer is None:
+            if self._loaded_optimizer_state_dict is not None: # loaded
+                optimizer_state_dict = self._loaded_optimizer_state_dict
+            else:
+                raise "Must load() or train() before saving"
+        else:
+            optimizer_state_dict = self.trainer.optimizer.state_dict()
 
         if name is not None:
             self.set_name(name)
@@ -274,10 +270,11 @@ class Train(Sample):
         del config['seed']
 
         checkpoint_save(self.path, 
-                        self.model, self.trainer.optimizer,
-                        self.state,
-                        config
-                        )
+                        self.state, config,
+                        self.model.state_dict(), 
+                        optimizer_state_dict)
+
+        self.last_saved_state = copy.copy(self.state)
 
 
 

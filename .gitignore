@@ -4,6 +4,7 @@ __pycache__/
 .env
 .pylintrc
 *.egg-info
+_old
 
 projects/data/*
 

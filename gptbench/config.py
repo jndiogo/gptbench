@@ -163,20 +163,23 @@ def checkpoint_load(path_prefix, load_optimizer_state:bool):
         js = f.read()
     j = json.loads(js)
 
-    return (model_state_dict, optimizer_state_dict, j['state'], j['config'])
+    return (j['state'], j['config'],
+            model_state_dict, optimizer_state_dict)
 
 
 
 def checkpoint_save(path_prefix, 
-                    model, optimizer, state_dict, config_dict):
+                    state_dict, config_dict,
+                    model_state_dict, 
+                    optimizer_state_dict
+                    ):
 
     # no CTRL+C interruptions while saving to avoid incomplete/corrupt checkpoint files
     original_sigint = signal.getsignal(signal.SIGINT)
     signal.signal(signal.SIGINT, signal.SIG_IGN)
 
-
-    torch.save(model.state_dict(), path_prefix + "model.pt")
-    torch.save(optimizer.state_dict(), path_prefix + "optimizer.pt")
+    torch.save(model_state_dict, path_prefix + "model.pt")
+    torch.save(optimizer_state_dict, path_prefix + "optimizer.pt")
 
     # config json
     d = {'state': state_dict,

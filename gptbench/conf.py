@@ -245,7 +245,7 @@ class Conf():
         return self.dump(verbose=1)
 
     def dump(self, verbose, indent=0):
-        """ 0: compact, 1: verbose, 2: verbose + _registry """
+        """ 0: compact, 1: verbose, 2: verbose with types, 3: verbose + types  + _registry """
         
         indent_str = ' ' * indent
 
@@ -266,8 +266,10 @@ class Conf():
                     sub.append(indent_str + contents)
 
             else:
-                if verbose:
-                    st = "%s: %s (%s) " % (k, v, type(v).__name__)
+                if verbose >= 2:
+                    st = "%s: %s (%s)" % (k, v, type(v).__name__)
+                elif verbose >= 1:
+                    st = "%s: %s" % (k, v)
                 else:
                     st = "%s=%s " % (k, v)
 
@@ -277,7 +279,7 @@ class Conf():
                     _own.append(indent_str + st)
 
         
-        if verbose >= 2 and len(self._registry):
+        if verbose >= 3 and len(self._registry):
             _own.append(indent_str + "_registry=%s" % self._registry)
         
         sep = '\n' if verbose else ''

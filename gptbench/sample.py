@@ -70,13 +70,6 @@ class Sample:
 
         self.reset(name)
 
-        self.model = None
-        self.trainer = None
-
-        self.train_dataset = None
-        self.val_dataset = None
-
-        self._resumed_optimizer_state_dict = None
         self._can_train = False
 
 
@@ -144,14 +137,6 @@ class Sample:
                                         self.config.trainer.batch_size)
 
 
-
-
-    def set_name(self, name):
-        self.name = name
-        self.path = os.path.join(self.work_dir, self.name, '').replace(os.sep, '/')
-        self.log_path = os.path.join(self.path, LOG_DIR, '').replace(os.sep, '/')
-
-
     def reset(self, name=None, reset_config=True):
         if name is None:
             name=DEFAULT_NAME
@@ -165,6 +150,16 @@ class Sample:
                        'val_loss': float('inf'), # last evaluated validation dataset loss
                        'eval_loss': float('inf') # last evaluation loss calculated from train_loss and val_loss according to eval_type
                        }
+
+        self.last_saved_state = copy.copy(self.state)
+        
+        self.model = None
+        self.trainer = None
+
+        self.train_dataset = None
+        self.val_dataset = None
+
+        self._loaded_optimizer_state_dict = None
 
 
     # -----------------------------------------------------------------------------
@@ -186,7 +181,7 @@ class Sample:
         assert self.config.dataset.has('class_name') and self.config.dataset.has('train_path'), "Need a dataset to init. Set config.dataset with class_name and train_path. Or call set_datasets()"
 
 
-        self._resumed_optimizer_state_dict = None
+        self._loaded_optimizer_state_dict = None
 
         # model init
         if init_type == 'new' or init_type == 'resume':
@@ -202,13 +197,13 @@ class Sample:
 
                 self.log(LogFlag.INIT, f"Loading checkpoint from {self.path}")
 
-                (model_state_dict, self._resumed_optimizer_state_dict, 
-                 state_dict,
-                 config_dict) = checkpoint_load(self.path, load_optimizer_state=self._can_train)
-                # only load optimizer state if do_train
+                (state_dict, config_dict,
+                model_state_dict, self._loaded_optimizer_state_dict) = checkpoint_load(self.path, load_optimizer_state=self._can_train)
 
-                # update global config from resumed configs'
+                # update state and config resumeds
                 self.state.update(state_dict)
+                self.last_saved_state = copy.copy(self.state)
+
                 self.config.update(config_dict)
 
 
@@ -894,6 +889,13 @@ class Sample:
 
 
 
+
+
+
+    def set_name(self, name):
+        self.name = name
+        self.path = os.path.join(self.work_dir, self.name, '').replace(os.sep, '/')
+        self.log_path = os.path.join(self.path, LOG_DIR, '').replace(os.sep, '/')
 
 
     def path_append(self, filename, text, clear=False):
