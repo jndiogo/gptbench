@@ -3,22 +3,23 @@ import os, sys, random, json, gc
 import torch
 from torch.nn import functional as F
 
-import numpy as np
 
 # -----------------------------------------------------------------------------
 
-def set_seed(seed, verbose=True):
+def set_all_random_seeds(seed):
     if seed == 0:
         random.seed()
         seed = random.randrange(2**32)
 
-    if verbose:
-        print(f"New random seed {seed}")
-
     random.seed(seed)
+
+    import numpy as np
     np.random.seed(seed)
+
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
+
+    return seed
 
 
 

@@ -50,8 +50,8 @@ class Train(Sample):
 
 
 
-    def __init__(self, name=DEFAULT_NAME, work_dir=DEFAULT_WORK_DIR, log_mask=LogFlag.ALL):
-        super().__init__(name, work_dir, log_mask)
+    def __init__(self, name=DEFAULT_NAME, work_dir=DEFAULT_WORK_DIR, log_mask=LogFlag.ALL, seed=None):
+        super().__init__(name, work_dir, log_mask, seed)
 
         self.trainer = None
         self._can_train = True
@@ -139,7 +139,7 @@ class Train(Sample):
                 self._loaded_optimizer_state_dict = None # consummed!
 
 
-        self.log(LogFlag.INIT, f"Batches per epoch: {int(self.trainer.batches_for_epoch())}")
+        self.log(LogFlag.INIT, f"Iters per epoch: {int(self.trainer.batches_for_epoch())}")
 
 
         if self.config.train.eval_save_loss is not None:
@@ -239,10 +239,11 @@ class Train(Sample):
                 model_evaluated = True
 
 
-        train.log(LogFlag.TRAIN_DOT, '.', end='', flush=True)
-
         if first_iter:
             train.log(LogFlag.CUDA_MEMORY, cuda_max_memory())
+
+
+        train.log(LogFlag.TRAIN_DOT, '.', end='', flush=True)
 
 
 
@@ -256,7 +257,7 @@ class Train(Sample):
             if self._loaded_optimizer_state_dict is not None: # loaded
                 optimizer_state_dict = self._loaded_optimizer_state_dict
             else:
-                raise "Must load() or train() before saving"
+                raise RuntimeError("Must load() or train() before saving")
         else:
             optimizer_state_dict = self.trainer.optimizer.state_dict()
 

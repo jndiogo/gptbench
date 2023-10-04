@@ -228,7 +228,7 @@ class CharDataset(Dataset):
 
 # -----------------------------------------------------------------------------
 
-class PaddedLineCharDataset(Dataset):
+class CharLineDataset(Dataset):
     """
     UTF-8 character dataset. index <=> full utf-8 character. Read from line-based text files.
     Each sample is padded at the right with a given char. Last X char predicts a -1 index in Y, no used for loss calc.
@@ -243,53 +243,58 @@ class PaddedLineCharDataset(Dataset):
 
                                 line_sep_char='\n',
                                 pad_char='\0',
-                                shuffle=False,
+                                pre_shuffle=False,
                                 **ignore_other_kwargs):
         """ returns train_dataset, val_dataset - val dataset can be None """
 
         # extra params (after verbose) can come from strings, convert eventual non-str:
-        shuffle = bool_from_any(shuffle)
+        pre_shuffle = bool_from_any(pre_shuffle)
 
-        data = PaddedLineCharDataset.load_data(data_path=train_path, verbose=verbose)
+        data = CharLineDataset.load_data(data_path=train_path, verbose=verbose)
+
+        if pre_shuffle: # shuffle lines before creating the datasets
+            lines = data.split(line_sep_char)
+            random.shuffle(lines)
+            data = line_sep_char.join(lines)
 
         val = None
 
         if val_path is not None: # val from path
 
-            val_data = PaddedLineCharDataset.load_data(data_path=val_path, verbose=verbose)
+            val_data = CharLineDataset.load_data(data_path=val_path, verbose=verbose)
 
             # calc combined vocab
-            shared_vocab_chars = PaddedLineCharDataset.calc_vocab_chars(data + val_data, 
+            shared_vocab_chars = CharLineDataset.calc_vocab_chars(data + val_data, 
                                                                         line_sep_char=line_sep_char,
                                                                         pad_char=pad_char)
 
-            train = PaddedLineCharDataset(block_size, data=data, 
-                                          line_sep_char=line_sep_char, pad_char=pad_char, shuffle=shuffle,
+            train = CharLineDataset(block_size, data=data, 
+                                          line_sep_char=line_sep_char, pad_char=pad_char,
                                           shared_vocab_chars=shared_vocab_chars, verbose=verbose)
 
-            val = PaddedLineCharDataset(block_size, data=val_data,
-                              line_sep_char=line_sep_char, pad_char=pad_char, shuffle=shuffle,
+            val = CharLineDataset(block_size, data=val_data,
+                              line_sep_char=line_sep_char, pad_char=pad_char,
                               shared_vocab_chars=shared_vocab_chars, verbose=verbose)
 
         elif train_split is not None: # split from train
 
             assert train_split > 0. and train_split <= 1., "0 < train split <= 1"
 
-            split_index = PaddedLineCharDataset.line_start_char_from_ratio(data, line_sep_char=line_sep_char, line_ratio=train_split)
+            split_index = CharLineDataset.line_start_char_from_ratio(data, line_sep_char=line_sep_char, line_ratio=train_split)
 
-            train = PaddedLineCharDataset(block_size, data=data[:split_index],
-                                line_sep_char=line_sep_char, pad_char=pad_char, shuffle=shuffle,
+            train = CharLineDataset(block_size, data=data[:split_index],
+                                line_sep_char=line_sep_char, pad_char=pad_char,
                                 verbose=verbose)
 
             if split_index < len(data):
                 shared_vocab_chars = train.get_vocab_items()            
-                val = PaddedLineCharDataset(block_size, data=data[split_index:],
-                                  line_sep_char=line_sep_char, pad_char=pad_char, shuffle=shuffle,
+                val = CharLineDataset(block_size, data=data[split_index:],
+                                  line_sep_char=line_sep_char, pad_char=pad_char,
                                   shared_vocab_chars=shared_vocab_chars, verbose=verbose)
 
         else:
-            train = PaddedLineCharDataset(block_size, data=data,
-                                line_sep_char=line_sep_char, pad_char=pad_char, shuffle=shuffle,
+            train = CharLineDataset(block_size, data=data,
+                                line_sep_char=line_sep_char, pad_char=pad_char,
                                 verbose=verbose)
 
         return train, val
@@ -351,7 +356,7 @@ class PaddedLineCharDataset(Dataset):
     def __init__(self, block_size, data=None, data_path=None,
                  line_sep_char='\n',
                  pad_char=None,
-                 shuffle=False,
+                 shuffle=False, # inner shuffle along dataset's own lines
                  shared_vocab_chars=None,
                  verbose=True):
 
@@ -370,7 +375,7 @@ class PaddedLineCharDataset(Dataset):
         if shared_vocab_chars is not None:            
             chars = shared_vocab_chars
         else:
-            chars = PaddedLineCharDataset.calc_vocab_chars(data, line_sep_char=line_sep_char, pad_char=pad_char)
+            chars = CharLineDataset.calc_vocab_chars(data, line_sep_char=line_sep_char, pad_char=pad_char)
 
         self.vocab_size = len(chars)
 
@@ -396,8 +401,6 @@ class PaddedLineCharDataset(Dataset):
         self.block_size = block_size
 
 
-    def get_src_data(self):
-        return self.src_data
 
     def sample_split(self, start_index, stop_index,
                      sep, sep_included):
@@ -424,9 +427,8 @@ class PaddedLineCharDataset(Dataset):
         return alist,blist
 
 
-
-
-
+    def get_src_data(self):
+        return self.src_data
 
 
     def get_data(self): 

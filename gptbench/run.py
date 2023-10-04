@@ -82,7 +82,7 @@ def config_run(config, sys_argv = None):
         if config.sample.has('start_text'):
             do.sample(config.sample.start_text)
         else:
-            raise Exception('sample.start_text must be given')
+            raise ValueError('sample.start_text must be given')
 
     elif mode == 'prompt':
         do.prompt()

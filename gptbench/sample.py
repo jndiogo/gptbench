@@ -13,7 +13,7 @@ from .trainer import Trainer
 from .config import empty_config, full_default_config, LogFlag, checkpoint_load, checkpoint_exists, dataset_get_default_config, dataset_class_from_name, DATASET_CLASS_MAP
 
 from .conf import Conf
-from .utils import print_sepline, set_seed, str_dict_from_str
+from .utils import print_sepline, set_all_random_seeds, str_dict_from_str
 
 
 
@@ -63,7 +63,7 @@ class Sample:
 
 
 
-    def __init__(self, name=DEFAULT_NAME, work_dir=DEFAULT_WORK_DIR, log_mask=LogFlag.ALL):
+    def __init__(self, name=DEFAULT_NAME, work_dir=DEFAULT_WORK_DIR, log_mask=LogFlag.ALL, seed=None):
 
         self.work_dir = work_dir
         self.log_mask = log_mask
@@ -72,36 +72,9 @@ class Sample:
 
         self._can_train = False
 
+        if seed is not None:
+            self.set_seed(seed)
 
-
-
-    def set_datasets(self, class_name, 
-                     train_path, train_split=None,
-                     val_path=None, 
-                     params_str=None,
-                     **params_kwargs):
-
-        assert class_name in DATASET_CLASS_MAP, f"Unknown dataset class '{class_name}'"
-        assert not ((params_str is not None) and bool(len(params_kwargs))), "Only one of params_str or **params_kwargs can be given"
-
-        self.config.dataset.class_name = class_name
-
-        self.config.dataset.train_path = train_path
-        self.config.dataset.train_split = train_split
-
-        self.config.dataset.val_path = val_path
-
-        params=''
-        if len(params_kwargs):
-            for k,v in params_kwargs.items():
-                if len(params): 
-                    params = ',' + params
-                params += k + '=' + str(v).replace(',' , '\,')
-        elif params_str is not None:
-            params = params_str
-
-        if len(params):
-            self.config.dataset.params = params
 
 
 
@@ -126,25 +99,12 @@ class Sample:
 
 
 
-    def get_config(self):
-        return copy.deepcopy(self.config)
-
-    def get_trained_sample_count(self):
-        return self.state['n_samples']
-
-    def get_trained_iter_count(self):
-        return Trainer.iter_from_sample(self.state['n_samples'], 
-                                        self.config.trainer.batch_size)
-
-
-    def reset(self, name=None, reset_config=True):
+    def reset(self, name=None, hard_reset=True):
         if name is None:
             name=DEFAULT_NAME
         self.set_name(name)
 
-        if reset_config:
-            self.config = full_default_config()
-
+    
         self.state = { 'n_samples': 0, # number of trained samples so far
                        'train_loss': float('inf'), # last evaluated train dataset loss 
                        'val_loss': float('inf'), # last evaluated validation dataset loss
@@ -156,16 +116,67 @@ class Sample:
         self.model = None
         self.trainer = None
 
-        self.train_dataset = None
-        self.val_dataset = None
-
         self._loaded_optimizer_state_dict = None
+
+        if hard_reset:
+            self.config = full_default_config()
+
+            self.train_dataset = None
+            self.val_dataset = None
+
+
+
+    def set_datasets(self, 
+                     # either call with one or two initialized datasets with same block_size as model.block_size:
+                     train_dataset=None, val_dataset=None,
+                     
+                     # or have GPTBench create it by passing:
+                     class_name=None, train_path=None, train_split=None, val_path=None, 
+                     params_str=None, **params_kwargs
+                     ):
+
+        """ Set already constructed datasets or config for later creation """
+
+        assert (train_dataset is not None) ^ (class_name is not None), "Either pass a constructed dataset by setting train_dataset/val_dataset or pass a class_name, train_path to be constructed later"
+
+        if train_dataset is not None:
+            self.train_dataset = train_dataset
+            self.val_dataset = val_dataset
+
+            self.config.dataset.class_name = self.config.dataset.train_path = self.config.dataset.val_path = self.config.dataset.params = None
+
+        else:
+            assert class_name in DATASET_CLASS_MAP, f"Unknown dataset class '{class_name}'"
+            assert not ((params_str is not None) and bool(len(params_kwargs))), "Only one of params_str or **params_kwargs can be given"
+
+            self.train_dataset = self.val_dataset = None
+
+            self.config.dataset.class_name = class_name
+
+            self.config.dataset.train_path = train_path
+            self.config.dataset.train_split = train_split
+
+            self.config.dataset.val_path = val_path
+
+            params=''
+            if len(params_kwargs):
+                for k,v in params_kwargs.items():
+                    if len(params): 
+                        params = ',' + params
+                    params += k + '=' + str(v).replace(',' , '\,')
+            elif params_str is not None:
+                params = params_str
+
+            if len(params):
+                self.config.dataset.params = params
+
+
 
 
     # -----------------------------------------------------------------------------
     def _init(self, init_type, over_config=None, name=None):
 
-        self.reset(name if name is not None else self.name, reset_config=False)
+        self.reset(name if name is not None else self.name, hard_reset=False)
 
         if over_config is None:
             over_config = empty_config()
@@ -174,9 +185,12 @@ class Sample:
             self.set_name(name)
 
 
-        # set seed
+        # set seed - gather setting from full and overriding config
         seed = over_config.get('seed', self.config.seed)
-        set_seed(seed, self.log_mask & LogFlag.INIT)
+        if seed != -1:
+            seed = self.set_seed(seed)
+            self.log(LogFlag.INIT, f"Set random seed: {seed}")
+
 
         assert self.config.dataset.has('class_name') and self.config.dataset.has('train_path'), "Need a dataset to init. Set config.dataset with class_name and train_path. Or call set_datasets()"
 
@@ -605,7 +619,7 @@ class Sample:
                         break
 
                     elif k == 'seed':
-                        set_seed(int(v))
+                        self.set_seed(int(v))
 
                     elif k == 'config':
                         print("Config:")
@@ -889,13 +903,25 @@ class Sample:
 
 
 
+    def get_config(self):
+        return copy.deepcopy(self.config)
 
+    def get_trained_sample_count(self):
+        return self.state['n_samples']
+
+    def get_trained_iter_count(self):
+        return Trainer.iter_from_sample(self.state['n_samples'], 
+                                        self.config.trainer.batch_size)
 
 
     def set_name(self, name):
         self.name = name
         self.path = os.path.join(self.work_dir, self.name, '').replace(os.sep, '/')
         self.log_path = os.path.join(self.path, LOG_DIR, '').replace(os.sep, '/')
+
+
+    def set_seed(self, seed):
+        return set_all_random_seeds(seed)
 
 
     def path_append(self, filename, text, clear=False):
@@ -920,39 +946,46 @@ class Sample:
     def _load_datasets(self):
 
         dataset_config = self.config.dataset
-        block_size = self.config.model.block_size
 
-        assert block_size is not None, "Must set config.model.block_size"
+        if dataset_config.class_name is not None:
 
-        try:
-            cls = dataset_class_from_name(dataset_config.class_name)
-        except KeyError:
-            assert False, f"Unknown config value dataset.class_name '{dataset_config.class_name}'"
+            block_size = self.config.model.block_size
+
+            assert block_size is not None, "Must set config.model.block_size"
+
+            try:
+                cls = dataset_class_from_name(dataset_config.class_name)
+            except KeyError:
+                assert False, f"Unknown config value dataset.class_name '{dataset_config.class_name}'"
 
 
-        dataset_config.train_path = dataset_config.train_path.replace(os.sep, '/')
-        if dataset_config.val_path is not None:
-            dataset_config.val_path = dataset_config.val_path.replace(os.sep, '/')
+            dataset_config.train_path = dataset_config.train_path.replace(os.sep, '/')
+            if dataset_config.val_path is not None:
+                dataset_config.val_path = dataset_config.val_path.replace(os.sep, '/')
 
-        # extra params?
-        if dataset_config.params is not None:
-            params = dataset_config.params = dataset_config.params.replace('\\n', '\n')
-            kwargs = str_dict_from_str(params)
+            # extra params?
+            if dataset_config.params is not None:
+                params = dataset_config.params = dataset_config.params.replace('\\n', '\n')
+                kwargs = str_dict_from_str(params)
+            else:
+                kwargs = {}
+
+
+            # normalize path to forward slashes
+            return cls.load_train_val_datasets(block_size,
+                                               dataset_config.train_path, dataset_config.train_split,
+                                               dataset_config.val_path,
+                                               
+                                               repeat_if_needed=True,
+                                               verbose=self.log_mask & LogFlag.INIT,
+                                               **kwargs)
+
+
+        elif self.train_dataset is not None: # already created
+            return self.train_dataset, self.val_dataset
+
         else:
-            kwargs = {}
-
-
-        # normalize path to forward slashes
-        return cls.load_train_val_datasets(block_size,
-                                           dataset_config.train_path, dataset_config.train_split,
-                                           dataset_config.val_path,
-                                           
-                                           repeat_if_needed=True,
-                                           verbose=self.log_mask & LogFlag.INIT,
-                                           **kwargs)
-
-
-
+            raise RuntimeError("Dataset must be defined in config or by calling set_dataset()")
 
 
     def _get_valid_start_text(self, start_text, dataset, warn):

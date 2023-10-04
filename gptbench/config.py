@@ -8,7 +8,7 @@ from enum import IntFlag
 import torch
 
 from .tokendataset import GPT2TokensDataset
-from .chardataset import CharDataset, PaddedLineCharDataset
+from .chardataset import CharDataset, CharLineDataset
 
 from .conf import Conf
 
@@ -74,7 +74,7 @@ def full_default_config():
 
     c = empty_config()
 
-    c.seed = 0 # 0 means random seed
+    c.seed = -1 # 0 means initial random seed, -1 means don't set seed
 
 
     # sample
@@ -117,7 +117,7 @@ def dataset_get_default_config():
 
 
 
-DATASET_CLASS_MAP = {'gpt2': GPT2TokensDataset, 'char': CharDataset, 'padlinechar': PaddedLineCharDataset}
+DATASET_CLASS_MAP = {'gpt2': GPT2TokensDataset, 'char': CharDataset, 'charline': CharLineDataset}
 
 def dataset_class_from_name(class_name):
     return DATASET_CLASS_MAP[class_name]
