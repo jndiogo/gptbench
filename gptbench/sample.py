@@ -19,8 +19,8 @@ from .utils import print_sepline, set_all_random_seeds, str_dict_from_str
 
 # -----------------------------------------------------------------------------
 DEFAULT_NAME = 'model'
-DEFAULT_WORK_DIR = './models'
-LOG_DIR = 'logs'
+DEFAULT_WORK_DIR = './checkpoints'
+LOG_SUBDIR = 'logs'
 
 class Sample:
 
@@ -429,11 +429,19 @@ class Sample:
 
     @torch.no_grad()
     def measure(self, questions, answers, 
-                test_fn=None, # None means case sensitive string compare, returning 1. or 0.
+
+                test_fn=None,                
+                log_list=None, log_cond=None,
+
                 stop_asap=None, 
                 **over_sample_config_kwargs):
 
         """
+        test_fn: None means case sensitive string compare, returning 1. or 0.
+
+        log_list: a list where entries that satisfy log_cond are logged. Tupple of (question, answer, generated)
+        log_cond: >=0 log test results >= log_cond. <0: log test results <= -log_cond
+
         stop_asap=[False] - when set to True, sample will stop and return.
 
         over_sample_config_kwargs: key values to override config.sample settings (and any over_sample_config).
@@ -485,9 +493,19 @@ class Sample:
 
 
         for i in range(len(questions)):
-            res = test_fn(questions[i],
-                           None if answers is None else answers[i],
-                           gen_list[i])
+            t = (questions[i],
+                 None if answers is None else answers[i],
+                 gen_list[i])
+
+            res = test_fn(*t)
+
+            # logging
+            if log_list is not None:
+                if log_cond >= 0:
+                    if res >= log_cond:
+                        log_list.append( t )
+                elif res <= -log_cond:
+                    log_list.append( t )
 
             results.append(res)
 
@@ -501,10 +519,14 @@ class Sample:
 
     def measure_accuracy(self, questions, answers, 
                          test_fn=None, # None means case sensitive string compare, returning 1. or 0.
+                         log_list=None, log_cond=None,
                          stop_asap=None, 
                          **over_sample_config_kwargs):
-
-        results = self.measure(questions, answers, test_fn, stop_asap, **over_sample_config_kwargs)
+        """
+        log_list: a list where entries that satisfy log_cond are logged. Tupple of (question, answer, generated)
+        log_cond: >=0 log test results >= log_cond. <0: log test results <= -log_cond
+        """
+        results = self.measure(questions, answers, test_fn, log_list, log_cond, stop_asap, **over_sample_config_kwargs)
 
         return sum(results) / len(results)
 
@@ -917,7 +939,7 @@ class Sample:
     def set_name(self, name):
         self.name = name
         self.path = os.path.join(self.work_dir, self.name, '').replace(os.sep, '/')
-        self.log_path = os.path.join(self.path, LOG_DIR, '').replace(os.sep, '/')
+        self.log_path = os.path.join(self.path, LOG_SUBDIR, '').replace(os.sep, '/')
 
 
     def set_seed(self, seed):
@@ -1010,6 +1032,6 @@ class Sample:
 
     def _ensure_path(self):
         """ Create work and log directories if not already existing """
-        os.makedirs(self.path + LOG_DIR, exist_ok=True)
+        os.makedirs(self.path + LOG_SUBDIR, exist_ok=True)
 
 

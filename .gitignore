@@ -9,5 +9,5 @@ _dev*
 
 projects/data/*
 
-models/
+checkpoints/
 

@@ -139,6 +139,9 @@ class CharDataset(Dataset):
     def get_data(self): 
         return self.data
 
+    def encdec(self, index): 
+        entry = self[index]
+        return self.decode(entry[0].tolist())
 
     def get_vocab_items(self):
         return list(self.stoi.keys())
@@ -244,11 +247,14 @@ class CharLineDataset(Dataset):
                                 line_sep_char='\n',
                                 pad_char='\0',
                                 pre_shuffle=False,
+                                extra_vocab=None,
                                 **ignore_other_kwargs):
         """ returns train_dataset, val_dataset - val dataset can be None """
 
         # extra params (after verbose) can come from strings, convert eventual non-str:
         pre_shuffle = bool_from_any(pre_shuffle)
+        if extra_vocab is not None:
+            extra_vocab = str(extra_vocab)
 
         data = CharLineDataset.load_data(data_path=train_path, verbose=verbose)
 
@@ -265,12 +271,12 @@ class CharLineDataset(Dataset):
 
             # calc combined vocab
             shared_vocab_chars = CharLineDataset.calc_vocab_chars(data + val_data, 
-                                                                        line_sep_char=line_sep_char,
-                                                                        pad_char=pad_char)
+                                                                  line_sep_char=line_sep_char,
+                                                                  pad_char=pad_char)
 
             train = CharLineDataset(block_size, data=data, 
-                                          line_sep_char=line_sep_char, pad_char=pad_char,
-                                          shared_vocab_chars=shared_vocab_chars, verbose=verbose)
+                                    line_sep_char=line_sep_char, pad_char=pad_char,
+                                    shared_vocab_chars=shared_vocab_chars, verbose=verbose)
 
             val = CharLineDataset(block_size, data=val_data,
                               line_sep_char=line_sep_char, pad_char=pad_char,
@@ -289,13 +295,13 @@ class CharLineDataset(Dataset):
             if split_index < len(data):
                 shared_vocab_chars = train.get_vocab_items()            
                 val = CharLineDataset(block_size, data=data[split_index:],
-                                  line_sep_char=line_sep_char, pad_char=pad_char,
-                                  shared_vocab_chars=shared_vocab_chars, verbose=verbose)
+                                      line_sep_char=line_sep_char, pad_char=pad_char,
+                                      shared_vocab_chars=shared_vocab_chars, verbose=verbose)
 
         else:
             train = CharLineDataset(block_size, data=data,
-                                line_sep_char=line_sep_char, pad_char=pad_char,
-                                verbose=verbose)
+                                    line_sep_char=line_sep_char, pad_char=pad_char,
+                                    verbose=verbose)
 
         return train, val
 
@@ -402,8 +408,8 @@ class CharLineDataset(Dataset):
 
 
 
-    def sample_split(self, start_index, stop_index,
-                     sep, sep_included):
+    def get_data_split(self, start_index, stop_index,
+                       sep, sep_included):
 
         """ Split samples by sep char into two lists a and b. sep_included: -1 at end of a, 1 at beginning of b, 0 not included """
 
@@ -430,10 +436,12 @@ class CharLineDataset(Dataset):
     def get_src_data(self):
         return self.src_data
 
-
     def get_data(self): 
         return self.data
 
+    def encdec(self, index): 
+        entry = self[index]
+        return self.decode(entry[0].tolist())
 
     def get_vocab_items(self):
         return list(self.stoi.keys())

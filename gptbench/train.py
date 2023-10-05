@@ -40,11 +40,6 @@ class Train(Sample):
         c.setup('eval_save_loss', 'csv,tensorboard', str, "Multiple values allowed: 'csv' saves a loss.csv, 'tensorboard' creates tensorboard logs")
 
 
-        c.setup('sample_period', -10., float, 'When to sample, in batch iterations. 0=never. Negative means -multiples of eval_period')
-
-
-        c.setup('log_period', -0.1, float, 'Simple forward pass loss log in batch iterations. Negative means -multiples of eval_period')
-
         return c
 
 
@@ -54,6 +49,9 @@ class Train(Sample):
         super().__init__(name, work_dir, log_mask, seed)
 
         self.trainer = None
+
+        self.set_train_logs()
+
         self._can_train = True
         self._tensorboard_writer = None
 
@@ -72,6 +70,16 @@ class Train(Sample):
         # override existing keys from kwargs
         self.config.trainer.update(over_trainer_config_kwargs)
 
+
+    def set_train_logs(self, loss_period=-0.1, dot_period=-0.01, sample_period=-10.0):
+        """
+        loss_period: simple forward pass loss log in batch iterations. Negative means -multiples of eval_period
+        dot_period: log a . for each n batch iterations. Negative means -multiples of eval_period
+        sample_period: when to sample, in batch iterations. 0=never. Negative means -multiples of eval_period
+        """
+        self.log_loss_period = loss_period 
+        self.log_dot_period = dot_period
+        self.log_sample_period = sample_period
 
 
 
@@ -101,21 +109,18 @@ class Train(Sample):
 
 
         # prepare state for callback
-        self._eval_period = self.config.train.eval_period
+        self._eval_period = self.config.train.eval_period        
 
-        if self.config.train.log_period < 0:
-            self._log_period = max(self.config.train.eval_period, 
-                                   int(self.config.train.eval_period * -self.config.train.log_period))
-        else:
-            self._log_period = self.config.train.log_period
+        if self.log_sample_period < 0:
+            self.log_sample_period = max(1, int(self._eval_period * -self.log_sample_period))
 
-        if self.config.train.sample_period < 0:
-            self._sample_period = max(self.config.train.eval_period, 
-                                      int(self.config.train.eval_period * -self.config.train.sample_period))
-        else:
-            self._sample_period = self.config.train.sample_period
+        if self.log_loss_period < 0:
+            self.log_loss_period = max(1, int(self._eval_period * -self.log_loss_period))
 
-        
+        if self.log_dot_period < 0:
+            self.log_dot_period = max(1, int(self._eval_period * -self.log_dot_period))
+
+
         # ensure model and logs dirs exist
         if self.config.train.eval_save_loss:
             self._ensure_path()            
@@ -187,9 +192,6 @@ class Train(Sample):
         first_iter = (iter_num == trainer.get_start_iter_num())
 
 
-        if train._log_period and iter_num % train._log_period == 0:
-            train.log(LogFlag.TRAIN_ITER, f"iter {iter_num} loss={trainer.last_loss:.4f}, iter_dt={trainer.iter_dt * 1000:.2f}ms")
-
         # evaluate model? And save checkpoint, loss, etc
         if (train._eval_period and 
             (iter_num == 0 or not first_iter) and # don't eval on first_iter except if iter 0
@@ -233,18 +235,21 @@ class Train(Sample):
                     train._tensorboard_writer.add_scalar('Loss/train', train_loss, iter_num)
                     train._tensorboard_writer.add_scalar('Loss/val', val_loss, iter_num)
 
+        else: # these only log if no eval occurred
 
-            if train._sample_period and iter_num % train._sample_period == 0:
-                train.sample(train.config.sample.start_text)
-                model_evaluated = True
+            if train.log_dot_period and iter_num % train.log_dot_period == 0:
+                train.log(LogFlag.TRAIN_ITER, '.', end='', flush=True)
+
+            if train.log_loss_period and iter_num % train.log_loss_period == 0:
+                train.log(LogFlag.TRAIN_ITER, f"iter {iter_num} loss={trainer.last_loss:.4f}, iter_dt={trainer.iter_dt * 1000:.2f}ms")
+
+
+        if train.log_sample_period and iter_num % train.log_sample_period == 0:
+            train.sample(train.config.sample.start_text)
 
 
         if first_iter:
             train.log(LogFlag.CUDA_MEMORY, cuda_max_memory())
-
-
-        train.log(LogFlag.TRAIN_DOT, '.', end='', flush=True)
-
 
 
 

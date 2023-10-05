@@ -284,8 +284,7 @@ class LogFlag(IntFlag):
 
     TRAIN_ITER = 4
     TRAIN_EVAL = 8
-    TRAIN_DOT = 16
-    TRAIN = TRAIN_DOT | TRAIN_ITER | TRAIN_EVAL
+    TRAIN = TRAIN_ITER | TRAIN_EVAL
 
     CUDA_MEMORY = 256
 

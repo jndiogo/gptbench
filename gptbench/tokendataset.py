@@ -143,6 +143,10 @@ class GPT2TokensDataset(Dataset):
     def get_data(self): 
         return self.data
 
+    def encdec(self, index): 
+        entry = self[index]
+        return self.decode(entry[0].tolist())
+
     def get_vocab_items(self):
         all_ints = range(self.get_vocab_size())
         return self.decode( np.array([all_ints]) )
