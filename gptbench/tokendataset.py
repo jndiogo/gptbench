@@ -11,7 +11,7 @@ import numpy as np
 
 import tiktoken
 
-from .utils import is_utf8, consumme_decode_utf8
+from .utils import is_utf8, consumme_decode_utf8, bool_from_any
 
 
 
@@ -58,7 +58,7 @@ class GPT2TokensDataset(Dataset):
             assert train_split > 0. and train_split <= 1., "0 < train split <= 1"
 
             # handle dummy dataset split:
-            split_index = int(len(data) * val_path_or_train_split)
+            split_index = int(len(data) * train_split)
             if split_index == 0 and len(data) == 1: # ensure a train dataset with one entry
                 split_index=1
 

@@ -63,7 +63,9 @@ class Sample:
 
 
 
-    def __init__(self, name=DEFAULT_NAME, work_dir=DEFAULT_WORK_DIR, log_mask=LogFlag.ALL, seed=None):
+    def __init__(self, name=DEFAULT_NAME, work_dir=DEFAULT_WORK_DIR, 
+                 seed=None, 
+                 log_mask=LogFlag.ALL):
 
         self.work_dir = work_dir
         self.log_mask = log_mask
@@ -375,7 +377,8 @@ class Sample:
 
 
         if isinstance(start_text,list):
-            # config's count and flush are ignored in sample_group_list: count=1 and flush=False
+            # config's count and flush are ignored in sample_group_list, but print_callback reacts to flush, so:
+            sample_config.flush = 0
 
             gen_list = self.sample_group_list(sample_config.max_len, 
 
@@ -394,7 +397,7 @@ class Sample:
             if isinstance(dest, list):
                 dest[:] = gen_list
             else:
-                print_callback(gen_list)
+                print_callback(gen_list,True)
 
         else:
 
@@ -708,10 +711,11 @@ class Sample:
         # split into same sized buckets
         ssb = {}
         for t in txl:
-            lt = len(t[1])
+            lt = len(self.train_dataset.encode(t[1])) # must be the length of the encoded tokens: we're grouping into same-sized tensors
             if lt not in ssb:
                 ssb[lt]=[]
             ssb[lt].append(t)
+
 
         def list_callback(strlist, islast):
             nonlocal dest
@@ -784,6 +788,8 @@ class Sample:
                         stop_asap=None):
 
         """
+        start_text can be a string or a list. If start_text is a list, all items must have equal dataset.encoded lengths. This is taken care of in sample_group_list(), if you need that.
+
         Callback receives a list of str with sampled text. Some str in list may be ''.
         stop_asap=[False] - when set to True, sample will stop and return.
 
@@ -894,7 +900,8 @@ class Sample:
 
         self.model.eval()
 
-        ix = torch.empty((text_count,len(start_text[0])), dtype=torch.long)
+        coded_len = len(self.train_dataset.encode(start_text[0]))
+        ix = torch.empty((text_count,coded_len), dtype=torch.long)
 
         for i,txt in enumerate(start_text):
             ix[i] = torch.tensor(self.train_dataset.encode(txt), dtype=torch.long)
@@ -981,7 +988,8 @@ class Sample:
                 assert False, f"Unknown config value dataset.class_name '{dataset_config.class_name}'"
 
 
-            dataset_config.train_path = dataset_config.train_path.replace(os.sep, '/')
+            if dataset_config.train_path is not None:
+                dataset_config.train_path = dataset_config.train_path.replace(os.sep, '/')
             if dataset_config.val_path is not None:
                 dataset_config.val_path = dataset_config.val_path.replace(os.sep, '/')
 
@@ -1030,7 +1038,7 @@ class Sample:
 
 
 
-    def _ensure_path(self):
+    def ensure_path(self):
         """ Create work and log directories if not already existing """
         os.makedirs(self.path + LOG_SUBDIR, exist_ok=True)
 

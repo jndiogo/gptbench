@@ -10,6 +10,8 @@ def set_all_random_seeds(seed):
     if seed == 0:
         random.seed()
         seed = random.randrange(2**32)
+    else:
+        seed = seed & (2**32-1)
 
     random.seed(seed)
 

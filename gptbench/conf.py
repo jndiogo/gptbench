@@ -115,8 +115,10 @@ class Conf():
 
             obj, leaf_name = self._obj_leaf_name_from_path(k)
 
+            assert obj is not None, f"Unknown object '{k}'" # destination object
+
             if key_must_exist:
-                assert leaf_name in obj, f"Unknown destination key '{k}'"
+                assert leaf_name in obj, f"Unknown key '{k}'" # destination key
 
             if leaf_name in obj and isinstance(obj[leaf_name], type(self)):
                 obj[leaf_name].update(v.items())

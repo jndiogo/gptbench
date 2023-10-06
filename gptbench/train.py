@@ -45,12 +45,16 @@ class Train(Sample):
 
 
 
-    def __init__(self, name=DEFAULT_NAME, work_dir=DEFAULT_WORK_DIR, log_mask=LogFlag.ALL, seed=None):
-        super().__init__(name, work_dir, log_mask, seed)
+    def __init__(self, name=DEFAULT_NAME, work_dir=DEFAULT_WORK_DIR, 
+                 seed=None,
+                 log_mask=LogFlag.ALL, 
+                 log_dot_period=-0.01, log_loss_period=-0.1, log_sample_period=-10.0):
+
+        super().__init__(name, work_dir, seed, log_mask)
 
         self.trainer = None
 
-        self.set_train_logs()
+        self.set_train_log_periods(log_dot_period, log_loss_period, log_sample_period)
 
         self._can_train = True
         self._tensorboard_writer = None
@@ -71,16 +75,21 @@ class Train(Sample):
         self.config.trainer.update(over_trainer_config_kwargs)
 
 
-    def set_train_logs(self, loss_period=-0.1, dot_period=-0.01, sample_period=-10.0):
+    def set_train_log_periods(self, dot_period=None, loss_period=None, sample_period=None):
         """
+        A positive value is an iteration count, negative value is -ratio of config.train.eval_period
         loss_period: simple forward pass loss log in batch iterations. Negative means -multiples of eval_period
         dot_period: log a . for each n batch iterations. Negative means -multiples of eval_period
         sample_period: when to sample, in batch iterations. 0=never. Negative means -multiples of eval_period
         """
-        self.log_loss_period = loss_period 
-        self.log_dot_period = dot_period
-        self.log_sample_period = sample_period
+        if dot_period is not None:
+            self.log_dot_period = dot_period
 
+        if loss_period is not None:
+            self.log_loss_period = loss_period 
+
+        if sample_period is not None:
+            self.log_sample_period = sample_period
 
 
     def train(self, 
@@ -123,7 +132,7 @@ class Train(Sample):
 
         # ensure model and logs dirs exist
         if self.config.train.eval_save_loss:
-            self._ensure_path()            
+            self.ensure_path()            
 
 
         if self.in_log(LogFlag.CUDA_MEMORY):
@@ -194,7 +203,7 @@ class Train(Sample):
 
         # evaluate model? And save checkpoint, loss, etc
         if (train._eval_period and 
-            (iter_num == 0 or not first_iter) and # don't eval on first_iter except if iter 0
+            (iter_num == 0 or not first_iter) and # don't eval on local first_iter except if iter 0
             iter_num % train._eval_period == 0): # evaluate train/val loss 
 
             # evaluate both the train and validation score
@@ -215,7 +224,10 @@ class Train(Sample):
             train.state['val_loss'] = val_loss
             train.state['eval_loss'] = eval_loss
 
-            train.log(LogFlag.TRAIN_EVAL, f"iter {iter_num} ({trainer.epoch_from_sample_num():.3f} epoch): loss train={train_loss:.4f}, val={val_loss:.4f}, eval->{eval_loss:.4f}")
+            if train.log_dot_period and not first_iter:
+                train.log(LogFlag.TRAIN_ITER, '') # new line after ......
+
+            train.log(LogFlag.TRAIN_EVAL, f"Iter {iter_num} ({trainer.epoch_from_sample_num():.3f} epoch): loss train={train_loss:.4f}, val={val_loss:.4f}, eval->{eval_loss:.4f}")
 
 
             if (train_config.eval_save_checkpt == 1 and eval_loss < train.last_saved_state['eval_loss']) \
@@ -241,11 +253,15 @@ class Train(Sample):
                 train.log(LogFlag.TRAIN_ITER, '.', end='', flush=True)
 
             if train.log_loss_period and iter_num % train.log_loss_period == 0:
-                train.log(LogFlag.TRAIN_ITER, f"iter {iter_num} loss={trainer.last_loss:.4f}, iter_dt={trainer.iter_dt * 1000:.2f}ms")
+                if train.log_dot_period:
+                    train.log(LogFlag.TRAIN_ITER, '') # new line after ......
+                train.log(LogFlag.TRAIN_ITER, f"Iter {iter_num} loss={trainer.last_loss:.4f}, iter_dt={trainer.iter_dt * 1000:.2f}ms")
 
 
         if train.log_sample_period and iter_num % train.log_sample_period == 0:
-            train.sample(train.config.sample.start_text)
+            out=[]
+            train.sample(train.config.sample.start_text, dest=out)
+            train.log(LogFlag.TRAIN_ITER, 'Sampling:', '\n'.join(out))
 
 
         if first_iter:
@@ -269,7 +285,7 @@ class Train(Sample):
         if name is not None:
             self.set_name(name)
 
-        self._ensure_path()
+        self.ensure_path()
 
         config = self.config.to_dict()
         # don't include seed

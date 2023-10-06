@@ -247,14 +247,12 @@ class CharLineDataset(Dataset):
                                 line_sep_char='\n',
                                 pad_char='\0',
                                 pre_shuffle=False,
-                                extra_vocab=None,
+                                extra_vocab_chars=None,
                                 **ignore_other_kwargs):
         """ returns train_dataset, val_dataset - val dataset can be None """
 
         # extra params (after verbose) can come from strings, convert eventual non-str:
         pre_shuffle = bool_from_any(pre_shuffle)
-        if extra_vocab is not None:
-            extra_vocab = str(extra_vocab)
 
         data = CharLineDataset.load_data(data_path=train_path, verbose=verbose)
 
@@ -276,11 +274,13 @@ class CharLineDataset(Dataset):
 
             train = CharLineDataset(block_size, data=data, 
                                     line_sep_char=line_sep_char, pad_char=pad_char,
-                                    shared_vocab_chars=shared_vocab_chars, verbose=verbose)
+                                    shared_vocab_chars=shared_vocab_chars, extra_vocab_chars=extra_vocab_chars,
+                                    verbose=verbose)
 
             val = CharLineDataset(block_size, data=val_data,
                               line_sep_char=line_sep_char, pad_char=pad_char,
-                              shared_vocab_chars=shared_vocab_chars, verbose=verbose)
+                              shared_vocab_chars=shared_vocab_chars, extra_vocab_chars=extra_vocab_chars,
+                              verbose=verbose)
 
         elif train_split is not None: # split from train
 
@@ -289,18 +289,21 @@ class CharLineDataset(Dataset):
             split_index = CharLineDataset.line_start_char_from_ratio(data, line_sep_char=line_sep_char, line_ratio=train_split)
 
             train = CharLineDataset(block_size, data=data[:split_index],
-                                line_sep_char=line_sep_char, pad_char=pad_char,
-                                verbose=verbose)
+                                    line_sep_char=line_sep_char, pad_char=pad_char,
+                                    extra_vocab_chars=extra_vocab_chars,
+                                    verbose=verbose)
 
             if split_index < len(data):
                 shared_vocab_chars = train.get_vocab_items()            
                 val = CharLineDataset(block_size, data=data[split_index:],
                                       line_sep_char=line_sep_char, pad_char=pad_char,
-                                      shared_vocab_chars=shared_vocab_chars, verbose=verbose)
+                                      shared_vocab_chars=shared_vocab_chars, # no need for extra_vocab_chars: already in shared_vocab_chars
+                                      verbose=verbose)
 
         else:
             train = CharLineDataset(block_size, data=data,
                                     line_sep_char=line_sep_char, pad_char=pad_char,
+                                    extra_vocab_chars=extra_vocab_chars,
                                     verbose=verbose)
 
         return train, val
@@ -364,6 +367,7 @@ class CharLineDataset(Dataset):
                  pad_char=None,
                  shuffle=False, # inner shuffle along dataset's own lines
                  shared_vocab_chars=None,
+                 extra_vocab_chars=None,
                  verbose=True):
 
         """
@@ -382,6 +386,9 @@ class CharLineDataset(Dataset):
             chars = shared_vocab_chars
         else:
             chars = CharLineDataset.calc_vocab_chars(data, line_sep_char=line_sep_char, pad_char=pad_char)
+
+        if extra_vocab_chars is not None:
+            chars = CharLineDataset.calc_vocab_chars(chars + extra_vocab_chars)
 
         self.vocab_size = len(chars)
 

@@ -61,7 +61,7 @@ class GPT(nn.Module):
         config.block_size = 1024  # openai's model block_size
 
         if model_config_override is not None:
-            config.update(model_config_override, filter_key_list=["dropout", "device", "dtype"])
+            config.update(model_config_override, accept_keys=["dropout", "device", "dtype"])
 
         model = GPT(config, model_type)
 

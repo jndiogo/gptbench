@@ -18,25 +18,42 @@ def config_run(config, sys_argv = None):
     if sys_argv is not None:
         config = merge_config_from_sysargv(sys.argv, config)
 
-    assert config.has('mode') and config.has('init'), "Please provide at least the mode and init params"
-
-
-    # fill-in optional object creation params
-    ops = {}
-    if config.has('name'):
-        ops['name'] = config.name
-        del config.name # delete from config because these are not real config entries
-    if config.has('work_dir'):
-        ops['work_dir'] = config.work_dir
-        del config.work_dir
-    if config.has('log_mask'):
-        ops['log_mask'] = int(config.log_mask)
-        del config.log_mask
+    assert config.has('init') and config.has('mode'), "Please provide at least the init=new|resume|gpt2* and mode=train|sample|prompt params"
 
     mode=config.mode
     del config.mode
     init = config.init
     del config.init
+
+
+    # fill-in optional object creation params and remove them from config
+    ops = {}
+    if config.has('name'):
+        ops['name'] = config.name
+        del config.name # delete from config because these are not real config entries
+
+    if config.has('work_dir'):
+        ops['work_dir'] = config.work_dir
+        del config.work_dir
+
+    # logs
+    if config.has('log_mask'):
+        ops['log_mask'] = int(config.log_mask)
+        del config.log_mask
+
+    # only for training
+    if config.has('log_dot_period'):
+        if mode == 'train':
+            ops['log_dot_period'] = float(config.log_dot_period)
+        del config.log_dot_period
+    if config.has('log_loss_period'):
+        if mode == 'train':
+            ops['log_loss_period'] = float(config.log_loss_period)
+        del config.log_loss_period
+    if config.has('log_sample_period'):
+        if mode == 'train':
+            ops['log_sample_period'] = float(config.log_sample_period)
+        del config.log_sample_period
 
 
     if mode == 'train':
