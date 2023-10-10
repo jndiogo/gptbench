@@ -19,7 +19,7 @@ Hope this can be a contribution to a better understanding of these weird and fas
 
 ## Installation
 
-Requires Python 3.7+ and PyTorch. Also uses NumPy, the tiktoken library (for the BPE tokenizer) and Hugging Face's transformers library (just to download GPT2 checkpoints).
+Requires Python 3.7+ and PyTorch 2. Also uses NumPy, the tiktoken library (for the BPE tokenizer) and Hugging Face's transformers library (just to download GPT2 checkpoints).
 
 You can run it in plain CPU or a CUDA GPU.
 
