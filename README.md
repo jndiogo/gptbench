@@ -174,13 +174,13 @@ can be used to set config.sample.start_text with "21+89=" before running.
 
 
 
-
-
-
-
 ### Out-of-memory errors
 
 Some larger models like gpt2-* can be sampled from, but will require huge memory amounts to be trained. If you get an out-of-memory error, set config.trainer.batch_size to 1 and you might be able to train them with a 6Gb GPU, or slower with the CPU. 
+
+
+
+
 
 ## Config
 
@@ -272,7 +272,13 @@ The trainer config section controls optimizer and other training parameters:
 |adamw_beta2|AdamW beta2|
 |adamw_weight_decay|AdamW weight decay, only applied on matmul weights|
 
-Other info about config settings, like default values can be gathered from the source.
+Other info about config settings, like default values or data types, can be gathered from the source.
+
+To see the current config being used, do:
+
+```python
+print(ben.get_config().dump(2))
+```
 
 
 

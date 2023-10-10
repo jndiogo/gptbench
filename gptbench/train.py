@@ -1,5 +1,5 @@
 """
-
+The Train class can do model training and also inference as it derives from the Sample class.
 """
 
 import os, sys, signal, json, copy

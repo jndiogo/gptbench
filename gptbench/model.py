@@ -1,4 +1,6 @@
 """
+Slighly modified model.py from minGPT.
+
 Full definition of a GPT Language Model, all of it in this single file.
 
 References:
@@ -38,7 +40,7 @@ class GPT(nn.Module):
         
         # these options must be filled in externally
         c.setup('vocab_size', None, int, 'Size of the vocabulary. Must be set from dataset in use')
-        c.setup('block_size', None, int, 'Block size: number of vocabulary items processed. Must be set')
+        c.setup('block_size', None, int, 'Block size: number of vocabulary items processed at a time. Must be set')
         
         # dropout hyperparameter
         c.setup('dropout', 0.1, float, 'Dropout hyperparameter')

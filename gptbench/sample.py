@@ -1,5 +1,5 @@
 """
-
+The Sampl e class can do model inference. For training (and sampling) see the Train class.
 """
 
 import os, sys, copy, signal, json

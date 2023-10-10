@@ -1,5 +1,14 @@
 """
+Integrate config settings from the command line.
+All config settings options and config settings can be passed from the command line, for example:
 
+python -m gptbench.run -name=add2_script -init=resume -mode=sample -sample.start_text="21+89="
+
+The name, init and mode choose what to do, while an argument like:
+
+-sample.start_text="21+89="
+
+can be used to set config.sample.start_text with "21+89=" before running.
 """
 
 import os, sys, copy, datetime
