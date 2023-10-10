@@ -47,7 +47,7 @@ class Sample:
         c.setup('emit_before', None, str, 'When sampling, stop before emitting this. With flush=1 only works for single chars')
 
         
-        c.setup('flush', True, bool, 'When sampling, should each token display immediately')
+        c.setup('flush', True, bool, 'When sampling, should each token display immediately?')
 
         c.setup('eot_stop', 0, int, "Should generation stop when dataset's special End-Of-Text token is emitted? 0=don't stop, -1=stop before, 1=stop after (and display it)")
 
@@ -73,6 +73,7 @@ class Sample:
         self.reset(name)
 
         self._can_train = False
+        self.trainer = None
 
         if seed is not None:
             self.set_seed(seed)

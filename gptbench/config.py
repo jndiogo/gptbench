@@ -110,7 +110,7 @@ def dataset_get_default_config():
 
     c.setup('val_path', None, str, 'Validation dataset path. If set, train_split is not used')
 
-    c.setup('params', None, str, "String in the form 'name=vale,name=value,...' containing extra parameters for dataset creation")
+    c.setup('params', None, str, "String in the form 'name1=value1,name2=value2,...' containing extra parameters for dataset creation")
 
     return c
 

@@ -1,7 +1,7 @@
 """
 GPTBench can be used from a python script exactly as in the jupyter notebook examples.
 
-Another way is by using the command line arguments to override config options set in a script like this.
+Another way is by using the command line arguments to override config options set in a script like this one below.
 
 In this manner, we can init a new model, resume (load a checkpoint) for training or sampling, sample from it, etc
 - and all this from the command line.
@@ -10,7 +10,7 @@ To run, call the script with at least two args:
 
 -init=new: same as init_new()
       resume: load() an existing checkpoint
-      gpt2, gpt2-medium, gpt2-large, gpt2-xl: init from a pretrained GPT2 checkpoint, which wil be downloaded from Hugging Face and cached locally.
+      gpt2, gpt2-medium, gpt2-large, gpt2-xl: init from a pretrained GPT2 checkpoint, which will be downloaded from Hugging Face and cached locally.
 
 -mode=train: train model as specified in config.train, model, trainer and dataset
       sample: sample from an initial text in config.sample.start_text, according to other config.sample settings
@@ -22,7 +22,7 @@ To run, call the script with at least two args:
 See config_run() for more options.
 
 
-Actually, you don't even need a script, as all options and config settings can be passed from the comand line, for example:
+Actually, you don't even need a script, as all options and config settings can be passed from the command line, for example:
 
 python -m gptbench.run -name=add2_script -init=resume -mode=sample -sample.start_text="21+89="
 

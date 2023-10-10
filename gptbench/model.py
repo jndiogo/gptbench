@@ -30,7 +30,7 @@ class GPT(nn.Module):
         # device to run on
         c.setup('device', 'auto', str, "Device for running the net: 'cuda', 'cpu' or any other supported by Torch")
 
-        c.setup('dtype', 'float32', str, "Type: 'float32', 'bfloat16'")
+        c.setup('dtype', 'float32', str, "Data type: 'float32', 'bfloat16'")
 
         c.setup('n_layer', None, int, 'Number of transformer blocks')
         c.setup('n_head', None, int, 'Number of attention heads')

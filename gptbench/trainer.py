@@ -28,14 +28,14 @@ class Trainer:
         c.setup('grad_norm_clip', 1.0, float, 'Clip gradients to this norm')
 
         # optimizer parameters
-        c.setup('optimizer', 'adamw', str, "Optimizer type: sgd or 'adamw'")
+        c.setup('optimizer', 'adamw', str, "Optimizer type: 'sgd' or 'adamw'")
 
-        c.setup('learning_rate', 1e-4, float, 'Initial learning rate.') 
+        c.setup('learning_rate', 1e-4, float, 'Initial learning rate') 
         #5e-4? @TODO: find reasonable value. "the model we're using is so small that we can go a bit faster"
 
         # these are for AdamW optimizer
         c.setup('adamw_beta1', 0.9, float, 'AdamW beta1'), 
-        c.setup('adamw_beta2', 0.95, float, 'AdamW beta1'),
+        c.setup('adamw_beta2', 0.95, float, 'AdamW beta2'),
         c.setup('adamw_weight_decay', 0.1, float, 'AdamW weight decay, only applied on matmul weights')
 
         return c

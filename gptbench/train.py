@@ -37,7 +37,7 @@ class Train(Sample):
 
         c.setup('eval_save_checkpt', 1, int, 'When to save a checkpoint: 0=never, 1=on new lower evaluated loss, 2=always')
 
-        c.setup('eval_save_loss', 'csv,tensorboard', str, "Multiple values allowed: 'csv' saves a loss.csv, 'tensorboard' creates tensorboard logs")
+        c.setup('eval_save_loss', 'csv,tensorboard', str, "Multiple values allowed, separated with comma: 'csv' saves a loss.csv, 'tensorboard' creates tensorboard logs")
 
 
         return c
@@ -51,8 +51,6 @@ class Train(Sample):
                  log_dot_period=-0.01, log_loss_period=-0.1, log_sample_period=-10.0):
 
         super().__init__(name, work_dir, seed, log_mask)
-
-        self.trainer = None
 
         self.set_train_log_periods(log_dot_period, log_loss_period, log_sample_period)
 
@@ -96,9 +94,8 @@ class Train(Sample):
               trainer_batch_size=None, 
               iter_count=None, batch_end_callback=None, **over_train_config_kwargs):
 
-        """  """
+        """ Dataset must have been set either by calling set_datasets() or via config """
 
-        self.log(LogFlag.INIT, f"Training")
 
         # save train config so that any overrides are local to this function
         saved_train_config = copy.copy(self.config.train)
@@ -140,6 +137,11 @@ class Train(Sample):
 
 
 
+        if self.train_dataset is None: # load dataset(s) from config
+            (self.train_dataset, self.val_dataset) = self._load_datasets()
+            assert self.train_dataset is not None, "Unable to load dataset(s)"
+
+
         if self.trainer is None:
             # construct the trainer object
             self.trainer = Trainer(self.config.trainer, 
@@ -152,8 +154,6 @@ class Train(Sample):
                 self.log(LogFlag.INIT , "Resumed optimizer state")
                 self._loaded_optimizer_state_dict = None # consummed!
 
-
-        self.log(LogFlag.INIT, f"Iters per epoch: {int(self.trainer.batches_for_epoch())}")
 
 
         if self.config.train.eval_save_loss is not None:
@@ -176,8 +176,11 @@ class Train(Sample):
         self.trainer.set_callback('on_batch_end', lambda trainer: batch_end_callback(trainer, self))
 
 
-
         # run the optimization
+        self.log(LogFlag.INIT, f"Training")
+
+        self.log(LogFlag.INIT, f"Iters per epoch: {int(self.trainer.batches_for_epoch())}")
+
         self.trainer.run(run_iter_count=iter_count)
 
 
