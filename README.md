@@ -32,7 +32,7 @@ pip install -e .
 
 ## Projects
 
-See [Projects](projects/README.md).
+See [Projects](projects/readme.md).
 
 
 
