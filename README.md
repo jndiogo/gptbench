@@ -1,6 +1,6 @@
-# GPT Bench
+# GPTBench
 
-GPTBench is a workbench where you can experiment with transformer models like GPT. It aims at a more "intimate" contact with GPT-like transformer models. What can transformers learn even without giga-data (and still fitting a GPU)? "Small is beautiful!"
+This is a kind of a workbench where you can experiment with transformer models like GPT. It aims at a more "intimate" contact with GPT-like transformer models. What can transformers learn even without giga-data (and still fitting a GPU)? "Small is beautiful!"
 
 GPTBench can be used to conveniently train a large or small transformer model and see what it can learn:
 
