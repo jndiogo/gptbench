@@ -42,7 +42,7 @@ See [Projects](projects/readme.md).
 To sample from a pretrained GPT2 model (the smaller one with 124M params):
 
 ```python
-from gptbench import Sample, Train, empty_config
+from gptbench import Sample, empty_config
 
 ben = Sample('gpt2')
 
@@ -67,7 +67,9 @@ You can create a lightweight Sample object as above if you just want to sample f
 To train it, a Train object must be created, then setup a dataset and a config:
 
 ```python
-ben = Train('shakespeare', seed=0xacac1a)
+from gptbench import Train, empty_config
+
+ben = Train('shakespeare-model', seed=0xacac1a)
 
 # set train dataset - no validation dataset to maximize training data
 ben.set_datasets(class_name='gpt2', # GPT2TokensDataset
@@ -91,13 +93,14 @@ ben.sample("So it goes")
 
 Here we initialized a blank model with 8 layers, 8 heads, 128 dims for embedding and a block_size of 64. See the [Config](#config) and [References](#references) below for help on these config settings.
 
-During training, the model can be automatically saved every n steps, if the evaluated loss is better than before. At any time, a model can be manually saved and later loaded:
+During training, the model can be automatically saved every n steps, if the evaluated loss is better than before. It's saved with the name we gave during Train object creation - 'shakespeare-model'. This name can later be used to load the model checkpoint, in order to sampl efrom it or to continue training:
 
 ```python
-ben.save(name='skp-today')
+# later, instead of ben.init_new(), we init by loading the checkpoint:
+ben.load(name='shakespeare-model')
 
-# at a later time, in place of the above ben.init_new()...
-ben.load(name='skp1-today')
+# the model can be manually saved at any time with:
+ben.save(name='shakespeare-model')
 ```
 
 
@@ -107,7 +110,7 @@ GPTBench can be used from python exactly as in the included Jupyter notebook exa
 
 ```python
 import sys
-from gptbench import Train, empty_config, config_run
+from gptbench import config_run, empty_config
 
 if __name__ == '__main__':
 
@@ -144,26 +147,28 @@ The config_run() call in the last line will update the config with any -name=val
 python script.py -init=new -mode=train -trainer.batch_size=256
 ```
 
-In this manner, we can also init a new model, resume (load) a checkpoint for training or sampling, sample from it, etc - directly from the command line.
+In this manner, we can also init a new model, resume (load) a checkpoint for training or sampling, sample from it, etc - directly from the command line. You can break training at any time by interrupting the script with Ctrl+C, as the best checkpoint so far is periodically saved.
 
 To have config_run() take care of everything, call the script with at least two args:
 
 |Param|Values|
 |-----|------|
 |-init|new: same as init_new(), resume: load() an existing checkpoint, gpt2, gpt2-medium, gpt2-large, gpt2-xl: init from a pretrained GPT2 checkpoint, which will be downloaded from Hugging Face and cached locally.
-|-mode|train: train model as specified in config.train, model, trainer and dataset, sample: sample from an initial text in config.sample.start_text, according to other config.sample settings, prompt: run an interactive prompt where you can write start_text to feed the model's generation
+|-mode|train: train model as specified in config, sample: sample from an initial text set in config.sample.start_text, prompt: run an interactive prompt where you can write start_text to feed the model's generation
 |-name|You can also override any name set in the script used to load/save checkpoints. If not given, defaults to "model" and overwrites any existing with the same name|
 
 
 Actually, you don't even need a script, as all options and config settings can be passed from the command line with python -m, for example:
-
-python -m gptbench.run -name=add2_script -init=resume -mode=sample -sample.start_text="21+89="
+```python
+python -m gptbench.run -init=resume -mode=sample -sample.start_text="21+89="
+```
 
 So, the name, init and mode params choose what to do, while an argument like:
-
+```python
 -sample.start_text="21+89="
+```
 
-can be used to set config.sample.start_text with "21+89=" before running. See the add.py script in the add project and config_run() for more options.
+can be used to set config.sample.start_text with "21+89=" before running. See the add.py script in the add project and config_run() source for more options.
 
 
 
