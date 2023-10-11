@@ -7,7 +7,5 @@ __pycache__/
 _old*
 _dev*
 
-projects/data/*
-
 checkpoints/
 

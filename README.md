@@ -1,27 +1,27 @@
 # GPT Bench
 
-GPTBench is a workbench where you can experiment with transformer models like GPT.
+GPTBench is a workbench where you can experiment with transformer models like GPT. It aims at a more "intimate" contact with GPT-like transformer models. What can transformers learn even without giga-data (and still fitting a GPU)? "Small is beautiful!"
 
-It aims at a more "intimate" contact with GPT-like transformer models. What can transformers learn even without giga-data (and still fitting our GPUs)? "Small is beautiful"
+GPTBench can be used to conveniently train a large or small transformer model and see what it can learn:
 
-GPTBench is a kind of lab or workbench because you can use it to conveniently train a large or small transformer model and see what it can learn.
+- Model sampling is simple and also includes a prompt mode where you can continuously interact with the model without having to reload checkpoints. 
+- You can train it starting from a blank model or from a pretrained GPT2. Checkpoints can be loaded and saved at any point.
+- Can measure accuracy and can log training evaluations to a .csv and TensorBoard formats.
+- The gptbench package can be used in Python scripts or Jupyter notebooks or directly from the command line.
+- Includes simple examples for character-level and GPT2 token level datasets, for things like learning to add two numbers, decimal-roman numeral translation, number sequences and of course English text completion.
 
-Model sampling is simple and also includes a prompt mode where you can continuously interact with the model without having to reload checkpoints. You can train it starting from a blank model or from a pretrained GPT2. Checkpoints can be loaded and saved at any point. Can measure accuracy and can log training evaluations to a .csv and TensorBoard formats. The gptbench package can be used in Python scripts or Jupyter notebooks or directly from the command line.
+This package grew from Andrej Karpathy's [minGPT](https://github.com/karpathy/minGPT), to whom I humbly  express my gratitude for the [very inspiring lessons](https://www.youtube.com/watch?v=VMj-3S1tku0&list=PLAqhIrjkxbuWI23v9cThsA9GvCAUhRvKZ). The model.py and trainer.py classes are mostly the same as in minGPT, adapted to be integrated with the "workbench".
 
-Includes simple examples for character-level and GPT2 token level datasets, for things like learning to add two numbers, decimal-roman numeral translation, number sequences and of course English text completion.
-
-This package grew from Andrej Karpathy's [minGPT](https://github.com/karpathy/minGPT), to whom I must express my gratitude for the many and [very inspiring lessons](https://www.youtube.com/watch?v=VMj-3S1tku0&list=PLAqhIrjkxbuWI23v9cThsA9GvCAUhRvKZ). The model.py, trainer.py are mostly the same, adapted to be integrated with the "workbench".
-
-Hope this can be a contribution to a better understanding of these weird and fascinating machines, the transformers.
+Hoping this can be a contribution to a better understanding of these weird and fascinating machines, the (decoding) transformers.
 
 
 
 
 ## Installation
 
-Requires Python 3.7+ and PyTorch 2. Also uses NumPy, the tiktoken library (for the BPE tokenizer) and Hugging Face's transformers library (just to download GPT2 checkpoints).
+Requires Python 3.7+ and PyTorch 2. Also uses NumPy, the tiktoken library (for the BPE tokenizer) and Hugging Face's transformers library (to download GPT2 checkpoints).
 
-You can run it in plain CPU or a CUDA GPU.
+You can run it in a plain CPU or CUDA GPU.
 
 To use the gptbench package, download the repository and from the base directory (which has a setup.py script) do:
 
@@ -39,7 +39,7 @@ See [Projects](projects/readme.md).
 
 ## Usage
 
-To sample form the GPT2 smaller model (124M params):
+To sample from a pretrained GPT2 model (the smaller one with 124M params):
 
 ```python
 from gptbench import Sample, Train, empty_config
@@ -52,8 +52,8 @@ ben.init_pretrained('gpt2', cfg)
 ben.sample("What a beautiful day")
 ```
 
-
-To enter an interactive prompt mode:
+The first time will take longer to download the pretrained model, which will then be cached locally.
+Then, to enter an interactive prompt mode:
 
 ```python
 ben.prompt()
@@ -64,8 +64,7 @@ Type -quit to exit, Ctrl+C to break during generation.
 
 You can create a lightweight Sample object as above if you just want to sample from the model. 
 
-To train it, a Train object must be created, then setup a config and a dataset:
-
+To train it, a Train object must be created, then setup a dataset and a config:
 
 ```python
 ben = Train('shakespeare', seed=0xacac1a)
@@ -92,7 +91,7 @@ ben.sample("So it goes")
 
 Here we initialized a blank model with 8 layers, 8 heads, 128 dims for embedding and a block_size of 64. See the [Config](#config) and [References](#references) below for help on these config settings.
 
-After training, a model can be saved and later loaded:
+During training, the model can be automatically saved every n steps, if the evaluated loss is better than before. At any time, a model can be manually saved and later loaded:
 
 ```python
 ben.save(name='skp-today')
@@ -101,17 +100,14 @@ ben.save(name='skp-today')
 ben.load(name='skp1-today')
 ```
 
+
 ### From Python script, Jupyter or command line
 
-GPTBench can be used from a python script exactly as in the included Jupyter notebook examples. Another way is by using the command line arguments to override default config options, which can be set in a script like this:
+GPTBench can be used from python exactly as in the included Jupyter notebook examples. Another convenient way is by using the command line arguments to override default config options, which can be set in a script like this:
 
 ```python
-
 import sys
-
 from gptbench import Train, empty_config, config_run
-
-# -----------------------------------------------------------------------------
 
 if __name__ == '__main__':
 
@@ -142,41 +138,39 @@ if __name__ == '__main__':
     obj = config_run(c, sys.argv)
 ```
 
-The config_run() call in the last line will update the config with any name=value entries you pass in the command line. For example to override the trainer.batch_size to 256 you can call the script with:
+The config_run() call in the last line will update the config with any -name=value entries you pass in the command line. For example, to override the trainer.batch_size to 256 you can call the above script with:
 
 ```
 python script.py -init=new -mode=train -trainer.batch_size=256
 ```
 
-In this manner, we can also init a new model, resume (load a checkpoint) for training or sampling, sample from it, etc - and all this from the command line.
+In this manner, we can also init a new model, resume (load) a checkpoint for training or sampling, sample from it, etc - directly from the command line.
 
-To run, call the script with at least two args:
+To have config_run() take care of everything, call the script with at least two args:
 
 |Param|Values|
 |-----|------|
 |-init|new: same as init_new(), resume: load() an existing checkpoint, gpt2, gpt2-medium, gpt2-large, gpt2-xl: init from a pretrained GPT2 checkpoint, which will be downloaded from Hugging Face and cached locally.
 |-mode|train: train model as specified in config.train, model, trainer and dataset, sample: sample from an initial text in config.sample.start_text, according to other config.sample settings, prompt: run an interactive prompt where you can write start_text to feed the model's generation
-|-name|You can also override any name set in the script used to load/save checkpoints|
-
-See the add.py script in the add project and config_run() for more options.
+|-name|You can also override any name set in the script used to load/save checkpoints. If not given, defaults to "model" and overwrites any existing with the same name|
 
 
-Actually, you don't even need a script, as all options and config settings can be passed from the command line, for example:
+Actually, you don't even need a script, as all options and config settings can be passed from the command line with python -m, for example:
 
 python -m gptbench.run -name=add2_script -init=resume -mode=sample -sample.start_text="21+89="
 
-So, the name, init and mode choose what to do, while an argument like:
+So, the name, init and mode params choose what to do, while an argument like:
 
 -sample.start_text="21+89="
 
-can be used to set config.sample.start_text with "21+89=" before running.
+can be used to set config.sample.start_text with "21+89=" before running. See the add.py script in the add project and config_run() for more options.
 
 
 
 
 ### Out-of-memory errors
 
-Some larger models like gpt2-* can be sampled from, but will require huge memory amounts to be trained. If you get an out-of-memory error, set config.trainer.batch_size to 1 and you might be able to train them with a 6Gb GPU, or slower with the CPU. 
+Some larger models like gpt2-* can be sampled from, but will require huge memory amounts to be trained. If you get an out-of-memory error, try setting config.trainer.batch_size to 1 and you might be able to train them with a 6Gb+ GPU, or slower with the CPU. 
 
 
 
@@ -193,20 +187,20 @@ cfg['model.block_size']=512
 cfg.model.set(block_size=1024)
 ```
 
-A config is passed when you initialize a model, by calling init_new(), load() or init_pretrained() and is used to override settings as needed. For more information on how config settings are used, please check the source code.
+A config is passed when you initialize a model, by calling init_new(), load() or init_pretrained() and is used to override settings as needed.
 
 Config is divided in these five areas:
 
+
 ### Sample
-Sample config controls everything related to running the model in inference mode. This happens when you call sample() or during training if you enabled sampling with set_train_log_periods().
-All the above are accessed with sample.*.
+Sample config controls everything related to running the model in inference mode. This happens when you call sample() or during training if you enabled sampling logging with set_train_log_periods().
+All settings below are accessed with sample.*, for example sample.max_len.
 
 |Name | Info |
 |-----|------|
 |max_len|Max generated token count|
 |count|How many times to generate from the same start_text|
 |start_text|Starting text for generation. None: use random vocabulary item on each sampling. A str with starting text.If separated with start_text_sep multiple star_text are used (count is set to 1)|
-
 |start_text_sep|When used in start_text, this char separates multiple start strings. Default is pipe character '\|'|
 |emit_start|When sampling, emit start_text? Only if emit_after is None|
 |emit_after|When sampling, only emit after this text has been seen|
@@ -217,7 +211,6 @@ All the above are accessed with sample.*.
 |temp|Temperature|
 |max_batch_size|Maximum batch size when inferring in parallel with multiple start text. None means no limit which produce out-of-memory errors in larger models|
 |multiline_prompt|On prompt mode: input multiple lines until a Ctrl+D or Ctrl+Z (in Windows)|
-
 
 
 ### Train
@@ -231,6 +224,7 @@ eval_period|In batch iterations: each n batches we eval and check if saving mode
 |eval_save_checkpt|When to save a checkpoint: 0=never, 1=on new lower evaluated loss, 2=always|
 |eval_save_loss|Multiple values allowed, separated with comma: 'csv' saves a loss.csv, 'tensorboard' creates tensorboard logs|
 
+
 ### Dataset
 Configuration for the dataset:
 
@@ -241,6 +235,7 @@ Configuration for the dataset:
 |train_split|Train dataset split ratio (0..1) for creating a validation dataset. Only used if val_path is unset|
 |val_path|, Validation dataset path. If set, train_split is not used|
 |params|String in the form 'name1=value1,name2=value2,...' containing extra parameters for dataset creation|
+
 
 ### Model
 Model controls the GPT2 model settings:
@@ -272,7 +267,7 @@ The trainer config section controls optimizer and other training parameters:
 |adamw_beta2|AdamW beta2|
 |adamw_weight_decay|AdamW weight decay, only applied on matmul weights|
 
-Other info about config settings, like default values or data types, can be gathered from the source.
+Other info about config settings, like default values or data types, can be gathered from the source code, for example the model config is initialized in model.py.
 
 To see the current config being used, do:
 
@@ -285,10 +280,12 @@ print(ben.get_config().dump(2))
 
 ## Todo
 
-- Document dataset classes and that users can pass their own.
+- Document dataset classes and how users can pass their own. As dataset classes become consolidated, derive from a base.
 - Add better examples of GPT2 fine tuning.
 - Add shared batch/gradient accumulation to allow larger batch sizes. Available memory measurement will be needed.
-- Add Conf.help to list all help information in the registry
+- Add Conf.help() to list help information in the registry.
+- Better prompt() mode help.
+- Fix python -m gptbench.run warning.
 
 
 ## References
