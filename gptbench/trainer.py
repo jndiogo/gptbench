@@ -20,10 +20,10 @@ class Trainer:
     def get_default_config():
         c = Conf()
 
+        c.setup('batch_size', 32, int, 'Size of the batch in each forward training iteration')
+
         # dataloader parameters
         c.setup('n_workers', 0, int, 'DataLoader workers. In Windows setting to above 0 causes a long delay when calling iter().')
-
-        c.setup('batch_size', 32, int, 'Size of the batch in each forward training iteration')
 
         c.setup('max_samples', None, int, 'Absolute maximum limit on training samples. Negative -n for number of epochs')
 
@@ -47,6 +47,7 @@ class Trainer:
     def __init__(self, trainer_config, train_dataset, model, 
                  start_sample_num = 0,
                  optimizer = None, optimizer_state_dict=None):
+
         self.config = trainer_config
 
         self.model = model
@@ -186,6 +187,9 @@ class Trainer:
 
             # forward the model
             logits, loss = model(x, y)
+            del logits
+
+            self.last_loss = loss.item()
 
             # backprop and update the parameters
             model.zero_grad(set_to_none=True)
@@ -195,20 +199,21 @@ class Trainer:
 
             self.optimizer.step()
 
-            self.last_loss = loss.item()
+            del loss # does this help with peak memory consumption? What about speed?
 
-
-            self.trigger_callbacks('on_batch_end')
-
-            if not model.training: # callbacks may have moved to eval mode:
-                model.train()             
-
+            # update accounting
             self.sample_num += self.config.batch_size
             self.run_sample_num += self.config.batch_size
 
             tnow = time.time()
             self.iter_dt = tnow - self.iter_time
             self.iter_time = tnow
+
+            # call callbacks
+            self.trigger_callbacks('on_batch_end')
+
+            if not model.training: # callbacks may have moved to eval mode:
+                model.train()             
 
             # termination conditions
             if run_sample_count is not None and self.run_sample_count >= run_sample_count:

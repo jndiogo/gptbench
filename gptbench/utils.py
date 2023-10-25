@@ -212,6 +212,14 @@ def print_sepline():
 
 
 
+def cuda_memory_stats():
+    """
+    See https://discuss.pytorch.org/t/free-all-gpu-memory-used-in-between-runs/168202
+    """
+    if not torch.cuda.is_available(): return
+
+    print(f"cuda mem: allocated={torch.cuda.memory_allocated()/1024**2:.1f}MB, cached={torch.cuda.memory_reserved()/1024**2:.1f}MB")
+
 def cuda_max_memory_init():
     if not torch.cuda.is_available(): return
 

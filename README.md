@@ -214,7 +214,7 @@ All settings below are accessed with sample.*, for example sample.max_len.
 |eot_stop|Should generation stop when dataset's special End-Of-Text token is emitted? 0=don't stop, -1=stop before, 1=stop after (and display it)|
 |top|Top_k or top_p filtering: 0: off,  ]0..1]: top_p,  [-1..0[: top_k(vocab_size * -top),  >=1: top_k(int(n))|
 |temp|Temperature|
-|max_batch_size|Maximum batch size when inferring in parallel with multiple start text. None means no limit which produce out-of-memory errors in larger models|
+|max_batch_size|Maximum batch size when inferring in parallel with multiple start text. None means same as trainer.batch_size config entry|
 |multiline_prompt|On prompt mode: input multiple lines until a Ctrl+D or Ctrl+Z (in Windows)|
 
 

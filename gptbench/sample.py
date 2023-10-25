@@ -2,7 +2,7 @@
 The Sample class can do model inference. For training (and sampling) see the Train class.
 """
 
-import os, sys, copy, signal, json
+import os, sys, copy, signal, json, math
 
 import torch
 import numpy as np
@@ -55,7 +55,7 @@ class Sample:
         c.setup('temp',  1., float, "Temperature")
 
 
-        c.setup('max_batch_size', None, int, "Maximum batch size when inferring in parallel with mltiple start text. None means no limit which produce out-of-memory errors in larger models")
+        c.setup('max_batch_size', None, int, "Maximum batch size when inferring in parallel with multiple start text. None means same as trainer.batch_size config entry")
 
         c.setup('multiline_prompt', False, bool, 'On prompt mode: input multiple lines until a Ctrl+D or Ctrl+Z (in Windows)')
 
@@ -84,7 +84,7 @@ class Sample:
     def init_new(self, over_config, name=None):
         self._init('new', over_config, name)
 
-    def init_pretrained(self, init_type, over_config, name=None):
+    def init_pretrained(self, init_type, over_config=None, name=None):
         self._check_pretrained_type(init_type)
         self._init(init_type, over_config, name)
 
@@ -307,8 +307,6 @@ class Sample:
 
 
 
-
-
     def update_sample_config(self, over_sample_config=None, **over_sample_config_kwargs):
 
         #override existing keys
@@ -391,7 +389,7 @@ class Sample:
                                               eot_stop=sample_config.eot_stop,
                                               temp=sample_config.temp, top=sample_config.top,
 
-                                              max_batch_size=sample_config.max_batch_size,
+                                              max_batch_size=self._get_sample_max_batch_size(),
                                             
                                               stop_asap=stop_asap)
 
@@ -426,115 +424,6 @@ class Sample:
 
         # restore saved config
         self.config.sample = saved_sample_config
-
-
-
-
-
-    @torch.no_grad()
-    def measure(self, questions, answers, 
-
-                test_fn=None,                
-                log_list=None, log_cond=None,
-
-                stop_asap=None, 
-                **over_sample_config_kwargs):
-
-        """
-        test_fn: None means case sensitive string compare, returning 1. or 0.
-
-        log_list: a list where entries that satisfy log_cond are logged. Tupple of (question, answer, generated)
-        log_cond: >=0 log test results >= log_cond. <0: log test results <= -log_cond
-
-        stop_asap=[False] - when set to True, sample will stop and return.
-
-        over_sample_config_kwargs: key values to override config.sample settings (and any over_sample_config).
-
-        """
-
-        assert isinstance(questions, list), "questions must be a list"
-        if answers is not None:
-            assert isinstance(answers, list) and len(questions) == len(answers), "answers must be a list and same size as questions"
-
-
-        # save sample config so that any overrides are local here
-        saved_sample_config = copy.copy(self.config.sample)
-
-        # override existing config.sample keys from kwargs
-        self.config.sample.update(over_sample_config_kwargs)
-
-        sample_config = self.config.sample
-
-        gen_list = self.sample_group_list(sample_config.max_len, 
-
-                                          questions, 
-                                          emit_after=sample_config.emit_after,
-                                          emit_before=sample_config.emit_before,
-                                          emit_start=False,
-
-                                          eot_stop=sample_config.eot_stop,
-                                          temp=sample_config.temp, top=sample_config.top,
-
-                                          max_batch_size=sample_config.max_batch_size,
-                                        
-                                          stop_asap=stop_asap)
-
-        if stop_asap is not None and stop_asap[0]: # cancelled
-            self.config.sample = saved_sample_config
-            return None
-
-        #print(gen_list)
-
-        results = []
-
-        if test_fn is None:
-            def case_sensitive_equal(_question, answer, gen):
-                return float(str(answer) == str(gen))
-
-            assert answers is not None, "To use default test_fn please provide the answers list"
-
-            test_fn = case_sensitive_equal
-
-
-        for i in range(len(questions)):
-            t = (questions[i],
-                 None if answers is None else answers[i],
-                 gen_list[i])
-
-            res = test_fn(*t)
-
-            # logging
-            if log_list is not None:
-                if log_cond >= 0:
-                    if res >= log_cond:
-                        log_list.append( t )
-                elif res <= -log_cond:
-                    log_list.append( t )
-
-            results.append(res)
-
-        # restore saved config
-        self.config.sample = saved_sample_config
-
-        return results
-
-
-
-
-    def measure_accuracy(self, questions, answers, 
-                         test_fn=None, # None means case sensitive string compare, returning 1. or 0.
-                         log_list=None, log_cond=None,
-                         stop_asap=None, 
-                         **over_sample_config_kwargs):
-        """
-        log_list: a list where entries that satisfy log_cond are logged. Tupple of (question, answer, generated)
-        log_cond: >=0 log test results >= log_cond. <0: log test results <= -log_cond
-        """
-        results = self.measure(questions, answers, test_fn, log_list, log_cond, stop_asap, **over_sample_config_kwargs)
-
-        return sum(results) / len(results)
-
-
 
 
 
@@ -673,9 +562,6 @@ class Sample:
 
         # restore saved config
         self.config.sample = saved_sample_config
-
-
-
 
 
 
@@ -932,6 +818,235 @@ class Sample:
 
 
 
+    # ----------------------------------------------------------------------------- Measure and estimate
+
+    @torch.no_grad()
+    def estimate_loss(self, train_dataset, val_dataset, batch_size, iters):
+        """
+        train_dataset or val_dataset can be None to skip its eval.
+        Returns train_loss,val_loss any of which can be None.
+        """
+
+        self.model.eval()
+
+        out = []
+
+        for split in ['train', 'val']:
+            dataset=train_dataset if split == 'train' else val_dataset
+
+            if dataset is None:
+                out.append(None)
+                continue
+
+            losses = torch.zeros(iters)
+
+            for k in range(iters):
+
+                ix = torch.randint(len(dataset), (batch_size,))
+
+                batches = [dataset[i] for i in ix] # [(x,y),(x,y),...]
+
+                x = torch.stack([x for x,_ in batches])
+                y = torch.stack([y for _,y in batches])
+
+                x, y = x.to(self.model.device), y.to(self.model.device)
+
+                _, loss = self.model(x,y)
+
+                losses[k] = loss.item()
+
+            out.append(losses.mean().item())
+
+        return out
+
+
+
+    @torch.no_grad()
+    def measure_qa(self, questions, answers, 
+
+                    test_fn=None,                
+                    log_list=None, log_cond=None,
+
+                    stop_asap=None, 
+                    **over_sample_config_kwargs):
+
+        """
+        test_fn: None means case sensitive string compare, returning 1. or 0.
+
+        log_list: a list where entries that satisfy log_cond are logged. Tupple of (question, answer, generated)
+        log_cond: >=0 log test results >= log_cond. <0: log test results <= -log_cond
+
+        stop_asap=[False] - when set to True, sample will stop and return.
+
+        over_sample_config_kwargs: key values to override config.sample settings (and any over_sample_config).
+
+        """
+
+        assert isinstance(questions, list), "questions must be a list"
+        if answers is not None:
+            assert isinstance(answers, list) and len(questions) == len(answers), "answers must be a list and same size as questions"
+
+
+        # save sample config so that any overrides are local here
+        saved_sample_config = copy.copy(self.config.sample)
+
+        # override existing config.sample keys from kwargs
+        self.config.sample.update(over_sample_config_kwargs)
+
+        sample_config = self.config.sample
+
+        gen_list = self.sample_group_list(sample_config.max_len, 
+
+                                          questions, 
+                                          emit_after=sample_config.emit_after,
+                                          emit_before=sample_config.emit_before,
+                                          emit_start=False,
+
+                                          eot_stop=sample_config.eot_stop,
+                                          temp=sample_config.temp, top=sample_config.top,
+
+                                          max_batch_size=sample_config.max_batch_size,
+                                        
+                                          stop_asap=stop_asap)
+
+        if stop_asap is not None and stop_asap[0]: # cancelled
+            self.config.sample = saved_sample_config
+            return None
+
+        #print(gen_list)
+
+        results = []
+
+        if test_fn is None:
+            def case_sensitive_equal(_question, answer, gen):
+                return float(str(answer) == str(gen))
+
+            assert answers is not None, "To use default test_fn please provide the answers list"
+
+            test_fn = case_sensitive_equal
+
+
+        for i in range(len(questions)):
+            t = (questions[i],
+                 None if answers is None else answers[i],
+                 gen_list[i])
+
+            res = test_fn(*t)
+
+            # logging
+            if log_list is not None:
+                if log_cond >= 0:
+                    if res >= log_cond:
+                        log_list.append( t )
+                elif res <= -log_cond:
+                    log_list.append( t )
+
+            results.append(res)
+
+        # restore saved config
+        self.config.sample = saved_sample_config
+
+        return results
+
+
+
+
+    def measure_accuracy(self, questions, answers, 
+                         test_fn=None, # None means case sensitive string compare, returning 1. or 0.
+                         log_list=None, log_cond=None,
+                         stop_asap=None, 
+                         **over_sample_config_kwargs):
+        """
+        log_list: a list where entries that satisfy log_cond are logged. Tupple of (question, answer, generated)
+        log_cond: >=0 log test results >= log_cond. <0: log test results <= -log_cond
+        """
+        results = self.measure_qa(questions, answers, test_fn, log_list, log_cond, stop_asap, **over_sample_config_kwargs)
+
+        return sum(results) / len(results)
+
+
+
+
+    @torch.no_grad()
+    def measure_loss(self, dataset, stride=-1, max_batch_size=None):
+        """
+        stride: measurements are done at block_size blocks. stride controls how to advance along the dataset at each evaluation. if > 0: sample position increment, 0..-1: -ratio of block size, for example -1 means increment a block_size on each evaluation.
+        """
+
+        assert self.model is not None, "No model set"
+
+        block_size = self.model.block_size
+
+        if stride < 0:
+            stride = int(-stride * block_size)
+        stride = max(1, stride)
+
+        if max_batch_size is None:
+            max_batch_size=self._get_sample_max_batch_size()
+
+        self.model.eval()
+
+        data_len = len(dataset)
+
+        loss_list = []
+        last_end = 0
+        batch_x=[]
+        batch_y=[]
+
+        for begin in range(0, data_len, stride):
+
+            end = min(begin + block_size, data_len)
+
+            usable = end - last_end # don't account for mulitple losses for the same position, if stride < block_size
+
+            xy = dataset[begin] # returns block_size tensors
+
+            # block positions which were already accounted before
+            xy[1][:-usable] = -1
+
+            batch_x.append(xy[0])
+            batch_y.append(xy[1])
+            last_end = end
+
+
+            if len(batch_x) == max_batch_size or end == data_len: # forward batch
+
+                xb = torch.stack(batch_x).to(self.model.device)
+                yb = torch.stack(batch_y).to(self.model.device)
+                #print(xb.shape)
+
+                batch_x.clear()
+                batch_y.clear()
+
+                _,loss = self.model(xb,yb) # loss cross_entropy was only averaged over valid y positions
+
+                loss_list.append(loss.item())
+
+                del _,loss, xb,yb
+
+
+
+        # return average loss
+        return sum(loss_list)/len(loss_list)
+
+
+
+
+
+
+    def measure_perplexity(self, dataset, stride=-1, max_batch_size=None):
+
+        loss = self.measure_loss(dataset, stride=stride, max_batch_size=max_batch_size)
+
+        return math.exp(loss)
+
+
+
+
+
+
+
+# -----------------------------------------------------------------------------
 
     def get_config(self):
         return copy.deepcopy(self.config)
@@ -940,6 +1055,7 @@ class Sample:
         return self.state['n_samples']
 
     def get_trained_iter_count(self):
+        """ Depends on current batch_size. Might have been trained with other batch sizes before """
         return Trainer.iter_from_sample(self.state['n_samples'], 
                                         self.config.trainer.batch_size)
 
@@ -965,6 +1081,11 @@ class Sample:
     def log(self, log_mask: LogFlag, *args, **kwargs):
         if self.in_log(log_mask):
             print(*args, **kwargs)
+
+
+    def ensure_path(self):
+        """ Create work and log directories if not already existing """
+        os.makedirs(self.path + LOG_SUBDIR, exist_ok=True)
 
 
 
@@ -1016,7 +1137,7 @@ class Sample:
             return self.train_dataset, self.val_dataset
 
         else:
-            raise RuntimeError("Dataset must be defined in config or by calling set_dataset()")
+            raise RuntimeError("Dataset must be defined in config's dataset.* or by calling set_dataset()")
 
 
     def _get_valid_start_text(self, start_text, dataset, warn):
@@ -1036,11 +1157,111 @@ class Sample:
 
 
 
+    def _get_sample_max_batch_size(self):
+        if self.config.sample.max_batch_size is not None:
+            return self.config.sample.max_batch_size
+        else:
+            assert self.config.trainer.batch_size is not None, "config.trainer.batch_size cannot be None"
+            return self.config.trainer.batch_size
 
 
 
-    def ensure_path(self):
-        """ Create work and log directories if not already existing """
-        os.makedirs(self.path + LOG_SUBDIR, exist_ok=True)
 
 
+
+
+
+    @staticmethod
+    def estimate_max_batch_size(model_config, optimizer_type,
+                                starting_size=512, delta_size=0.5, times=2):
+
+        """
+        Try allocating model/optimizer with decreasing batch_size until it fits memory.
+        Should be called with empty memory before Sample or Train objects are created.
+        Measuring memory is messy: on Jupyter notebooks GPU memory gets stuck if an exception goes uncatched.
+
+        optimizer_type: string as in trainer.optimizer config setting or None for inference only.
+        delta_size: >0: ratio for next size, <0: add to next size
+        times should be >1 to simulate real conditions, like inside measure_loss() method. Possibly because memory freeing is asynchronous, freeing and then allocating will happen with previous memory still occupied?
+        """
+
+        print('Creating model')        
+        model = GPT(model_config)
+
+        if optimizer_type is not None:
+            print(f'Creating optimizer {optimizer_type}')
+            trainer_config = Trainer.get_default_config()
+            trainer_config.optimizer = optimizer_type
+            optimizer = model.configure_optimizers(trainer_config)
+            model.train()
+        else:
+            optimizer = None
+            model.eval()
+
+
+        import gc
+        def cleanup():
+            gc.collect()
+            model.free_memory()
+
+        def try_batch():
+
+            for t in range(times):
+                xb = torch.randint(0, model.vocab_size, (batch_size, model.block_size), dtype=torch.long).to(model.device)
+                yb = torch.randint(0, model.vocab_size, (batch_size, model.block_size), dtype=torch.long).to(model.device)
+
+                logits,loss = model(xb,yb)
+                del logits
+
+                if optimizer:
+                    model.zero_grad(set_to_none=True)
+                    loss.backward()
+                    optimizer.step()
+
+                del loss
+
+
+
+        batch_size = starting_size
+        delta_size = min(delta_size, 0.9)
+
+        while batch_size > 0:
+
+            try:
+                cleanup()
+
+                print(f"Trying batch_size {batch_size}...", end='')
+                
+                if optimizer is not None:
+                    try_batch()
+                else:
+                    with torch.no_grad():
+                        try_batch()
+
+                print(f" Fits")
+                break
+
+            except Exception as e:
+                print(f" Out of memory")
+                # print(e)
+    
+                if delta_size > 0:
+                    new_size = int(batch_size * delta_size)
+                else:
+                    new_size = int(batch_size + delta_size)
+
+                new_size = max(0, new_size)
+
+                if new_size == batch_size: # if same, decrement by one
+                    batch_size -= 1
+                else:
+                    batch_size = new_size
+
+        try:
+            cleanup()
+        except Exception as e:
+            print("Final cleanup() raised exception:", e)
+            pass
+
+        print(f"Enough memory for batch_size {batch_size}")
+        return batch_size

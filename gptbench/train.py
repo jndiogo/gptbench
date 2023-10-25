@@ -177,9 +177,7 @@ class Train(Sample):
 
 
         # run the optimization
-        self.log(LogFlag.INIT, f"Training")
-
-        self.log(LogFlag.INIT, f"Iters per epoch: {int(self.trainer.batches_for_epoch())}")
+        self.log(LogFlag.INIT, f"Training") # ({int(self.trainer.batches_for_epoch())} batch iters/epoch)
 
         self.trainer.run(run_iter_count=iter_count)
 
@@ -252,13 +250,14 @@ class Train(Sample):
 
         else: # these only log if no eval occurred
 
-            if train.log_dot_period and iter_num % train.log_dot_period == 0:
-                train.log(LogFlag.TRAIN_ITER, '.', end='', flush=True)
-
             if train.log_loss_period and iter_num % train.log_loss_period == 0:
                 if train.log_dot_period:
                     train.log(LogFlag.TRAIN_ITER, '') # new line after ......
                 train.log(LogFlag.TRAIN_ITER, f"Iter {iter_num} loss={trainer.last_loss:.4f}, iter_dt={trainer.iter_dt * 1000:.2f}ms")
+
+
+        if train.log_dot_period and iter_num % train.log_dot_period == 0:
+            train.log(LogFlag.TRAIN_ITER, '.', end='', flush=True)
 
 
         if train.log_sample_period and iter_num % train.log_sample_period == 0:
@@ -300,49 +299,5 @@ class Train(Sample):
                         optimizer_state_dict)
 
         self.last_saved_state = copy.copy(self.state)
-
-
-
-
-
-
-
-   # -----------------------------------------------------------------------------
-    @torch.no_grad()
-    def estimate_loss(self, train_dataset, val_dataset, batch_size, iters):
-        """ train_dataset or val_dataset can be None to skip its eval returns train_loss,val_loss any of which can be None"""
-
-        self.model.eval()
-
-        out = []
-
-        for split in ['train', 'val']:
-            dataset=train_dataset if split == 'train' else val_dataset
-
-            if dataset is None:
-                out.append(None)
-                continue
-
-            losses = torch.zeros(iters)
-
-            for k in range(iters):
-
-                ix = torch.randint(len(dataset), (batch_size,))
-
-                batches = [dataset[i] for i in ix] # [(x,y),(x,y),...]
-
-                x = torch.stack([x for x,_ in batches])
-                y = torch.stack([y for _,y in batches])
-
-                x, y = x.to(self.model.device), y.to(self.model.device)
-
-                _, loss = self.model(x,y)
-
-                losses[k] = loss.item()
-
-            out.append(losses.mean().item())
-
-        return out
-
 
 
