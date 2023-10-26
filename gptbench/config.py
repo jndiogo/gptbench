@@ -74,8 +74,7 @@ def full_default_config():
 
     c = empty_config()
 
-    c.seed = -1 # 0 means initial random seed, -1 means don't set seed
-
+    c.setup('seed', -1, int, "Random seed. 0 means choose a random initial seed, -1 means don't set seed")
 
     # sample
     c.sample = Sample.get_default_config()
@@ -276,6 +275,7 @@ def loss_trim(path_prefix, last_iter_num):
 
 # -----------------------------------------------------------------------------
 class LogFlag(IntFlag):
+
     NONE = 0
 
     INIT = 1 # init messages in init_* and in sample, train, etc.
@@ -290,5 +290,4 @@ class LogFlag(IntFlag):
 
     ALL = INIT | SAMPLE | TRAIN | CUDA_MEMORY
 
-
-
+    COMMON = ALL & ~CUDA_MEMORY

@@ -1,6 +1,6 @@
 """ GPT Bench """
 
-__version__ = '0.0.1'
+__version__ = '0.0.2'
 
 __all__ = [
     'Sample', 'LogFlag',
@@ -12,20 +12,17 @@ __all__ = [
 
 __author__ = 'Jorge Diogo'
 
-from .sample import Sample
-from .train import Train
+from .config import empty_config, merge_config_from_sysargv, LogFlag
+from .conf import Conf
+from .utils import consumme_decode_utf8
+
+from .model import GPT
 
 from .tokendataset import GPT2TokensDataset
 from .chardataset import CharDataset, CharLineDataset
 
-from .config import empty_config, merge_config_from_sysargv, LogFlag
-from .conf import Conf
-
-from .model import GPT
-
-from .utils import consumme_decode_utf8
-
-
+from .sample import Sample
+from .train import Train
 
 """
 Deal with warning when running with -m gptbench.run:

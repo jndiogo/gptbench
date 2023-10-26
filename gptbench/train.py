@@ -12,7 +12,7 @@ from .sample import Sample, LogFlag, DEFAULT_NAME, DEFAULT_WORK_DIR
 from .model import GPT
 from .trainer import Trainer
 
-from .config import checkpoint_save, loss_append, loss_trim
+from .config import checkpoint_save, loss_append, loss_trim, LogFlag
 
 from .conf import Conf
 from .utils import print_sepline, cuda_max_memory_init, cuda_max_memory
@@ -47,7 +47,7 @@ class Train(Sample):
 
     def __init__(self, name=DEFAULT_NAME, work_dir=DEFAULT_WORK_DIR, 
                  seed=None,
-                 log_mask=LogFlag.ALL, 
+                 log_mask=LogFlag.COMMON, 
                  log_dot_period=-0.01, log_loss_period=-0.1, log_sample_period=-10.0):
 
         super().__init__(name, work_dir, seed, log_mask)
@@ -192,7 +192,7 @@ class Train(Sample):
     def default_batch_end_callback(trainer, train):
 
         """
-        This callback is called at the end of each batch iteration by Trainer object.
+        This callback is called at the end of each batch iteration by Trainer object. All values are post-batch training.
         """
 
         train_config = train.config.train
@@ -200,7 +200,8 @@ class Train(Sample):
         train.state['n_samples'] = trainer.sample_num
         iter_num = trainer.get_iter_num()
 
-        first_iter = (iter_num == trainer.get_start_iter_num())
+        # first iter since Trainer object creation?
+        first_trainer_iter = (iter_num == trainer.get_start_iter_num() + 1)
 
 
         # log dot before others
@@ -209,9 +210,9 @@ class Train(Sample):
 
 
         # evaluate model? And save checkpoint, loss, etc
-        if (train._eval_period and 
-            (iter_num == 0 or not first_iter) and # don't eval on local first_iter except if iter 0
-            iter_num % train._eval_period == 0): # evaluate train/val loss 
+        if ((train._eval_period and iter_num % train._eval_period == 0) or 
+            (iter_num == 1) # always eval on first absolute iteration
+            ): # evaluate train/val loss 
 
             # evaluate both the train and validation score
             train_loss, val_loss = train.estimate_loss(
@@ -231,7 +232,7 @@ class Train(Sample):
             train.state['val_loss'] = val_loss
             train.state['eval_loss'] = eval_loss
 
-            if train.log_dot_period and not first_iter:
+            if train.log_dot_period and not first_trainer_iter:
                 train.log(LogFlag.TRAIN_ITER, '') # new line after ......
 
             train.log(LogFlag.TRAIN_EVAL, f"Iter {iter_num} ({trainer.epoch_from_sample_num():.3f} epoch): loss train={train_loss:.4f}, val={val_loss:.4f}, eval->{eval_loss:.4f}")
@@ -269,7 +270,7 @@ class Train(Sample):
             train.log(LogFlag.TRAIN_ITER, 'Sampling:', '\n'.join(out))
 
 
-        if first_iter:
+        if first_trainer_iter:
             train.log(LogFlag.CUDA_MEMORY, cuda_max_memory())
 
 

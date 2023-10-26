@@ -183,6 +183,9 @@ class Conf():
         else:
             return None
 
+    def help(self):
+        print(self.dump(3))
+
 
     #--------------------------------------------------------------------
 

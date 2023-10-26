@@ -10,7 +10,7 @@ import numpy as np
 from .model import GPT
 from .trainer import Trainer
 
-from .config import empty_config, full_default_config, LogFlag, checkpoint_load, checkpoint_exists, dataset_get_default_config, dataset_class_from_name, DATASET_CLASS_MAP
+from .config import LogFlag, empty_config, full_default_config, checkpoint_load, checkpoint_exists, dataset_get_default_config, dataset_class_from_name, DATASET_CLASS_MAP
 
 from .conf import Conf
 from .utils import print_sepline, set_all_random_seeds, str_dict_from_str
@@ -65,7 +65,7 @@ class Sample:
 
     def __init__(self, name=DEFAULT_NAME, work_dir=DEFAULT_WORK_DIR, 
                  seed=None, 
-                 log_mask=LogFlag.ALL):
+                 log_mask=LogFlag.COMMON):
 
         self.work_dir = work_dir
         self.log_mask = log_mask
@@ -438,20 +438,13 @@ class Sample:
         """ """
 
         allowed_cmds = [
-        'seed',
         'help',
         'quit',
-        'config',
-
-        'count',
-        'max_len',
-
-        'flush',
-        'eot_stop',
-        'top',
-        'temp',
-        'multiline_prompt',
+        'config'
+        'seed',
         ]
+
+        allowed_cmds += Sample.get_default_config().keys()
 
 
         print("Prompt mode: press Enter (single line mode), or Ctrl+D / Ctrl+Z (multiline mode) to submit starting text. Enter -help for available commands.")
@@ -481,9 +474,14 @@ class Sample:
 
 
         def print_help():
-            print("Enter sampling start text or a command in the form -cmd or -cmd=val. Possible commands: ", ['-' + c for c in allowed_cmds], "\n Press Ctrl+C once to stop generation.")
+            print("Help: Enter sampling start text or a command in the form -cmd or -cmd=val.")
+            print("Possible commands:", ', '.join(["'-" + c + "'" for c in allowed_cmds]), "\n")
+            print("=== Commands, values and help (prefix with '-' to use, ex: -cmd=1) ==================")
+            Sample.get_default_config().help()
+            print("=====================================================================================\n")
+            print("Press Ctrl+C once to stop generation.")
 
-        first = True
+
         while True:
             p = ''
             if sample_config.multiline_prompt:
