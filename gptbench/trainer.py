@@ -22,6 +22,8 @@ class Trainer:
 
         c.setup('batch_size', 32, int, 'Size of the batch in each forward training iteration')
 
+        c.setup('accum_size', None, int, 'Size for batch gradient accumulation to allow for larger batch sizes with lower memory usage. Setting batch_size must be a multiple of accum_size. For example: batch_size=32, accum_size=4 will simulate a batch of 32 by training 8 batches of 4 rows')
+
         # dataloader parameters
         c.setup('n_workers', 0, int, 'DataLoader workers. In Windows setting to above 0 causes a long delay when calling iter().')
 
@@ -140,6 +142,7 @@ class Trainer:
 
         assert self.optimizer is not None, "Optimizer must already be setup"
 
+
         model, config = self.model, self.config
 
         if self.config.max_samples is not None:
@@ -150,6 +153,15 @@ class Trainer:
         else:
             max_samples = None
 
+
+
+        if config.accum_size is None:
+            acc_size = config.batch_size
+        else:
+            assert config.batch_size % config.accum_size == 0, f"Setting trainer.batch_size {trainer_config.batch_size} must be a multiple of trainer.accum_size {trainer_config.accum_size}"
+            acc_size = config.accum_size
+
+        acc_steps = max(config.batch_size // acc_size, 1)
 
 
         # setup the dataloader
@@ -167,7 +179,7 @@ class Trainer:
         # slowdown here in Windows, if num_workers > 0
         data_iter = iter(train_loader)
 
-        self.run_sample_num = 0
+        self.run_sample_num = 0 # the sample number of the current train() call
         self.last_loss = float('inf')
         self.iter_time = time.time()
         
@@ -178,28 +190,60 @@ class Trainer:
             try:
                 batch = next(data_iter)
             except StopIteration:
-                print("---------------> StopIteration")
                 data_iter = iter(train_loader)
                 batch = next(data_iter)
 
             batch = [t.to(model.device) for t in batch]
             x, y = batch
 
-            # forward the model
-            logits, loss = model(x, y)
-            del logits
 
-            self.last_loss = loss.item()
+            if acc_steps == 1: # batch is a single forward: separated for simplicity
+                # forward the model
+                logits, loss = model(x, y)                
+                del logits
+                self.last_loss = loss.item()
 
-            # backprop and update the parameters
-            model.zero_grad(set_to_none=True)
-            loss.backward()
+                # backprop and update the parameters
+                loss.backward()
 
+            else: # gradient accumulation: scale loss and acumulate gradient
+                loss_acc = 0.
+                for s in range(acc_steps):
+
+                    # split batch samples
+                    begin = s * acc_size
+                    sx = x[begin:begin+acc_size]
+                    sy = y[begin:begin+acc_size]
+
+                    # forward the model
+                    logits, loss = model(sx, sy)
+                    del logits
+
+                    loss = loss / acc_steps # scale loss to account for gradient accumulation
+                    loss_acc += loss.item()
+
+                    # backprop and update the parameters
+                    loss.backward()
+
+                self.last_loss = loss_acc
+
+            # arriving here an entire batch_size has been trained
+
+            # gradient clip
             torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_norm_clip)
 
+            # step the optimizer
             self.optimizer.step()
 
-            del loss # does this help with peak memory consumption? What about speed?
+            # clean up gradients, no longer needed
+            model.zero_grad(set_to_none=True)
+
+            del loss # does this help with peak memory consumption? What about speed? Also the reason for del logits above, twice
+
+            # call callbacks
+            self.trigger_callbacks('on_batch_end')
+            if not model.training: # callbacks may have moved to eval mode:
+                model.train()             
 
             # update accounting
             self.sample_num += self.config.batch_size
@@ -209,11 +253,6 @@ class Trainer:
             self.iter_dt = tnow - self.iter_time
             self.iter_time = tnow
 
-            # call callbacks
-            self.trigger_callbacks('on_batch_end')
-
-            if not model.training: # callbacks may have moved to eval mode:
-                model.train()             
 
             # termination conditions
             if run_sample_count is not None and self.run_sample_count >= run_sample_count:

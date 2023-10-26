@@ -226,10 +226,21 @@ class GPT2TokensDataset(Dataset):
             return out # type str list with len = b
 
 
-    def bufd_decode(self, ids):
-        ''' Buffered token bytes -> utf-8 decoding. If tokens don't map to a valid utf-8 char, we buffer the bytes and prepend it to next call's, which will hopefully allow decoding to utf-8
+    def bufd_decode_init(self):
+        """
+        Important to init before using bufd_decode() as there might be stuck characters from previous bad unicode points
+        """
+        self.bufd_decode_list.clear()
 
-            ids can be: an int or list of ints (str output), or a numpy 2D array (str list output) "
+
+    def bufd_decode(self, ids):
+        '''
+        Buffered token bytes -> utf-8 decoding. 
+
+        If tokens don't map to a valid utf-8 char, we buffer the bytes and prepend it to next call's, which will hopefully allow decoding to utf-8. 
+        !BEWARE! that Death-sequences like b'\xe5\xaf' (GPT-2 token 34719) will make decoding stuck: no more tokens will be emited until a bufd_decode_init().
+
+        ids can be: an int or list of ints (str output), or a numpy 2D array (str list output) "
         '''
 
         enc = GPT2_ENC # tiktoken.get_encoding("gpt2")

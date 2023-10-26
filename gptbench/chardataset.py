@@ -203,6 +203,9 @@ class CharDataset(Dataset):
             return out # type str list with len = b
 
 
+    def bufd_decode_init(self):
+        pass
+
     def bufd_decode(self, ids):
         """ chars are always utf-8 complete, so just use normal decode """
         return self.decode(ids)
@@ -515,6 +518,8 @@ class CharLineDataset(Dataset):
         else:
             return out # type str list with len = b
 
+    def bufd_decode_init(self):
+        pass
 
     def bufd_decode(self, ids):
         """ chars are always utf-8 complete, so just use normal decode """

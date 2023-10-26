@@ -685,6 +685,8 @@ class Sample:
 
         # don't limit: if flush: count = 1
 
+        self.train_dataset.bufd_decode_init() # important to init before using as there might be stuck characters from previous bad unicode points
+
         eot_token = self.train_dataset.get_eot_token()
 
         if isinstance(start_text,list):
@@ -717,7 +719,7 @@ class Sample:
 
             new_chars_list = self.train_dataset.bufd_decode(idx)
 
-            if DEB: print("pre", chars_buffer, new_chars_list, emitted[0], emitting[0])
+            if DEB: print("pre", chars_buffer, idx, new_chars_list, emitted[0], emitting[0])
 
             for ib in range(b):
 
@@ -810,6 +812,7 @@ class Sample:
         if (not flush) and not (stop_asap is not None and stop_asap[0]): # emit buffered - but not if stop_asap
             chars_callback(chars_buffer, islast=True)
 
+        if DEB: print(y)
 
         return y
 
@@ -1033,7 +1036,6 @@ class Sample:
 
 
 
-
     def measure_perplexity(self, dataset, stride=-1, max_batch_size=None):
 
         loss = self.measure_loss(dataset, stride=stride, max_batch_size=max_batch_size)
@@ -1042,6 +1044,36 @@ class Sample:
 
 
 
+
+    @torch.no_grad()
+    def model_forward(self, text):
+        """
+        No config.sample settings are used here.
+        Returns logits,loss.
+        """
+
+        idx = self.train_dataset.encode(text)
+
+        assert len(idx) <= self.model.block_size, f"Can only forward up to model.block_size {self.model.block_size} tokens, text has {len(idx)}"
+
+        x = torch.tensor(idx, dtype=torch.long).to(self.model.device)
+        y = torch.empty(x.shape, dtype=torch.long).to(self.model.device)
+        y[:-1]=torch.as_tensor(idx[1:])
+        y[-1]=-1
+        
+        return self.model(x.unsqueeze(0),y.unsqueeze(0))
+
+
+    @torch.no_grad()
+    def model_forward_argmax(self, text):
+        """
+        No config.sample settings are used here.
+        Returns argmax,decoded text from argmax(logits)
+        """
+
+        logits,_ = self.model_forward(text)
+        am = logits.argmax(dim=-1)
+        return am, self.train_dataset.decode(am[0].tolist())
 
 
 

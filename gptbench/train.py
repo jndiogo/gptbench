@@ -192,6 +192,7 @@ class Train(Sample):
     def default_batch_end_callback(trainer, train):
 
         """
+        This callback is called at the end of each batch iteration by Trainer object.
         """
 
         train_config = train.config.train
@@ -200,6 +201,11 @@ class Train(Sample):
         iter_num = trainer.get_iter_num()
 
         first_iter = (iter_num == trainer.get_start_iter_num())
+
+
+        # log dot before others
+        if train.log_dot_period and iter_num % train.log_dot_period == 0:
+            train.log(LogFlag.TRAIN_ITER, '.', end='', flush=True)
 
 
         # evaluate model? And save checkpoint, loss, etc
@@ -248,16 +254,13 @@ class Train(Sample):
                     train._tensorboard_writer.add_scalar('Loss/train', train_loss, iter_num)
                     train._tensorboard_writer.add_scalar('Loss/val', val_loss, iter_num)
 
-        else: # these only log if no eval occurred
+        else: # only log loss if no eval occurred
 
             if train.log_loss_period and iter_num % train.log_loss_period == 0:
                 if train.log_dot_period:
                     train.log(LogFlag.TRAIN_ITER, '') # new line after ......
                 train.log(LogFlag.TRAIN_ITER, f"Iter {iter_num} loss={trainer.last_loss:.4f}, iter_dt={trainer.iter_dt * 1000:.2f}ms")
 
-
-        if train.log_dot_period and iter_num % train.log_dot_period == 0:
-            train.log(LogFlag.TRAIN_ITER, '.', end='', flush=True)
 
 
         if train.log_sample_period and iter_num % train.log_sample_period == 0:
