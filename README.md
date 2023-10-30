@@ -2,6 +2,8 @@
 
 This is a workbench where you can experiment with transformer LLM models. It aims at allowing a more "intimate" contact with GPT-like transformer models. What can transformers learn even without giga-data (and hopefully still fitting a GPU)?
 
+It's through size that LLMs achieve amazing results, but size is a big barrier for normal people to play with them. The GPT-2 level models are on the border of what can be trained on commonly available GPUs and can thus be very valuable. They're not the smartest, but they are quite pliable.
+
 GPTBench can be used to conveniently train a large or small transformer model and see what it can learn. It's made for tinkering and learning.
 
 - Model sampling is simple and also includes a prompt mode where you can continuously interact with the model without having to reload checkpoints. 
