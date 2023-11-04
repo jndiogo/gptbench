@@ -4,8 +4,11 @@ __pycache__/
 .env
 .pylintrc
 *.egg-info
+
 _old*
 _dev*
+_*.py
+_*.ipynb
 
 checkpoints/
 

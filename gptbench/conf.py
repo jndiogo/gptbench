@@ -249,7 +249,7 @@ class Conf():
     def __str__(self):
         return self.dump(verbose=1)
 
-    def dump(self, verbose, indent=0):
+    def dump(self, verbose=1, indent=0):
         """ 0: compact, 1: verbose, 2: verbose with types, 3: previous + help, 4: previous + _registry """
         
         indent_str = ' ' * indent

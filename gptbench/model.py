@@ -1,5 +1,5 @@
 """
-Slighly modified model.py from minGPT.
+Slighly modified model.py from minGPT with some features from nanoGPT (Flash Attention, block_size cropping).
 
 Full definition of a GPT Language Model, all of it in this single file.
 
@@ -40,10 +40,12 @@ class GPT(nn.Module):
         
         # these options must be filled in externally
         c.setup('vocab_size', None, int, 'Size of the vocabulary. Must be set from dataset in use')
-        c.setup('block_size', None, int, 'Block size: number of vocabulary items processed at a time. Must be set')
+        c.setup('block_size', None, int, 'Number of vocabulary items processed at a time. If set before loading or initializing from a pretrained model, will crop the loaded block_size')
         
         # dropout hyperparameter
         c.setup('dropout', 0.1, float, 'Dropout hyperparameter')
+
+        c.setup('flash_attn', True, bool, 'Use the more efficient Flash Attention method, on torch 2+ and supporting devices')
 
         return c
         
@@ -58,15 +60,15 @@ class GPT(nn.Module):
             # names follow the huggingface naming conventions
             # GPT-1
             #'openai-gpt':   dict(n_layer=12, n_head=12, n_embd=768),  # 117M params
-            # GPT-2 configs
+            # GPT-2 pretrained model configs:
             'gpt2':         dict(n_layer=12, n_head=12, n_embd=768),  # 124M params
             'gpt2-medium':  dict(n_layer=24, n_head=16, n_embd=1024), # 350M params
             'gpt2-large':   dict(n_layer=36, n_head=20, n_embd=1280), # 774M params
             'gpt2-xl':      dict(n_layer=48, n_head=25, n_embd=1600), # 1558M params
-            # Gophers
+            # Gophers:
             #'gopher-44m':   dict(n_layer=8, n_head=16, n_embd=512),
             # (there are a number more...)
-            # I made these tiny models up
+            # I made these tiny models up:
             #'gpt-mini':     dict(n_layer=6, n_head=6, n_embd=192),
             #'gpt-micro':    dict(n_layer=4, n_head=4, n_embd=128),
             #'gpt-nano':     dict(n_layer=3, n_head=3, n_embd=48),
@@ -175,20 +177,9 @@ class GPT(nn.Module):
             if pn.endswith('c_proj.weight'):
                 torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(2 * config.n_layer))
 
-        # report number of parameters (note we don't count the decoder parameters in lm_head)
-        self.n_params = sum(p.numel() for p in self.transformer.parameters())
-
         self.to(device=self.device, dtype=self.dtype)
 
 
-
-
-
-
-
-
-    def get_num_params(self):
-        return self.n_params
 
     def _init_weights(self, module):
         if isinstance(module, nn.Linear):
@@ -200,6 +191,109 @@ class GPT(nn.Module):
         elif isinstance(module, nn.LayerNorm):
             torch.nn.init.zeros_(module.bias)
             torch.nn.init.ones_(module.weight)
+
+
+    def forward(self, idx, targets=None, targets_ignore_index=-1):
+        device = idx.device
+        b, t = idx.size()
+        assert t <= self.block_size, f"Cannot forward sequence of length {t} > block_size ({self.block_size})"
+
+        pos = torch.arange(0, t, dtype=torch.long, device=device).unsqueeze(0) # shape (1, t)
+
+        # forward the GPT model itself
+        tok_emb = self.transformer.wte(idx) # token embeddings of shape (b, t, n_embd)
+        pos_emb = self.transformer.wpe(pos) # position embeddings of shape (1, t, n_embd)
+        x = self.transformer.drop(tok_emb + pos_emb)
+
+        for block in self.transformer.h:
+            x = block(x)
+        x = self.transformer.ln_f(x)
+        logits = self.lm_head(x)
+        # logits.shape=(B*T,C), targets.shape=(B*T) with values 0..C-1
+
+        # if we are given some desired targets also calculate the loss
+        loss = None
+        if targets is not None:
+            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=targets_ignore_index) 
+
+        return logits, loss
+
+
+
+    @torch.no_grad()
+    def generate(self, idx, 
+                 max_new_tokens,
+                 top=0, temperature=1.0,
+                 token_callback=None, stop_asap=None):
+        """
+        Take a conditioning sequence of indices idx (LongTensor of shape (b,t)) and complete
+        the sequence max_new_tokens times, feeding the predictions back into the model each time.
+        Most likely you'll want to make sure to be in model.eval() mode of operation for this.
+
+        top controls how to sample: 
+          0: no top_k nor top_p, sample from all probabilities
+          1: return the most probable token
+          ]0..1[: top_p(n)
+          >1: top_k(int(n))
+          [-1..0[: top_k(vocab_size * -n)
+
+        stop_asap=[False] - when set to True, must break and return
+
+        """
+
+        assert top <= self.vocab_size, f'Param top only up to vocab_size: {self.vocab_size}'
+
+        assert len(idx), 'At least one token is needed to generate'
+
+        if top >= -1. and top < 0.:
+            top = max(1, int(self.vocab_size * -top))
+
+        for i in range(max_new_tokens):
+            # if the sequence context is growing too long we must crop it at block_size
+            idx_cond = idx if idx.size(1) <= self.block_size else idx[:, -self.block_size:]
+
+            # forward the model to get the logits for the index in the sequence
+            logits, _ = self(idx_cond)
+            
+            # pluck the logits at the final step and scale by desired temperature
+            logits = logits[:, -1, :] / temperature
+
+            if top > 1: # top_k: crop the logits to only the top k options
+                v, _ = torch.topk(logits, k=int(top))
+                logits[logits < v[:, [-1]]] = -float('Inf')
+                # warning: can leave more than k values == v
+
+            elif top > 0 and top < 1: # top_p: keep only above cummulative probability
+                logits = top_p(logits, top)
+
+            # apply softmax to convert logits to (normalized) probabilities
+            probs = F.softmax(logits, dim=-1)
+
+            # either take the most likely element or sample from the distribution
+            if top == 1: # take best prob
+                _, idx_next = torch.topk(probs, k=1, dim=-1)
+            else: # multinomial sample
+                idx_next = torch.multinomial(probs, num_samples=1)
+
+
+            stop=0
+            if token_callback is not None:
+                stop = token_callback(idx_next, islast=not bool(max_new_tokens-1-i)) or 0
+
+            if stop == -1: # don't add and break
+                break
+
+            # append sampled index to the running sequence and continue
+            idx = torch.cat((idx, idx_next), dim=1)
+
+            if stop == 1: # added then break
+                break
+
+            if stop_asap is not None and stop_asap[0]:
+                break
+
+        return idx
+
 
 
 
@@ -259,104 +353,22 @@ class GPT(nn.Module):
         return optimizer
 
 
+    def crop_block_size(self, block_size):
+        # model surgery to decrease the block size if necessary
+        # e.g. we may load the GPT2 pretrained model checkpoint (block size 1024)
+        # but want to use a smaller block size for some smaller, simpler model
+        assert block_size <= self.block_size, "block_size must be smaller than existing size"
 
-    def forward(self, idx, targets=None, targets_ignore_index=-1):
-        device = idx.device
-        b, t = idx.size()
-        assert t <= self.block_size, f"Cannot forward sequence of length {t} > block_size ({self.block_size})"
-
-        pos = torch.arange(0, t, dtype=torch.long, device=device).unsqueeze(0) # shape (1, t)
-
-        # forward the GPT model itself
-        tok_emb = self.transformer.wte(idx) # token embeddings of shape (b, t, n_embd)
-        pos_emb = self.transformer.wpe(pos) # position embeddings of shape (1, t, n_embd)
-        x = self.transformer.drop(tok_emb + pos_emb)
-
+        self.block_size = block_size
+        self.transformer.wpe.weight = nn.Parameter(self.transformer.wpe.weight[:block_size])
         for block in self.transformer.h:
-            x = block(x)
-        x = self.transformer.ln_f(x)
-        logits = self.lm_head(x)
-        # logits.shape=(B*T,C), targets.shape=(B*T) with values 0..C-1
-
-        # if we are given some desired targets also calculate the loss
-        loss = None
-        if targets is not None:
-            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=targets_ignore_index) 
-
-        return logits, loss
+            if hasattr(block.attn, 'bias'):
+                block.attn.bias = block.attn.bias[:,:,:block_size,:block_size]
 
 
-
-    @torch.no_grad()
-    def generate(self, idx, 
-                 max_new_tokens, temperature=1.0, do_sample=False, top=0, 
-                 token_callback=None, stop_asap=None):
-        """
-        Take a conditioning sequence of indices idx (LongTensor of shape (b,t)) and complete
-        the sequence max_new_tokens times, feeding the predictions back into the model each time.
-        Most likely you'll want to make sure to be in model.eval() mode of operation for this.
-
-        top: 0: no top_k nor top_p
-          ]0..1[: top_p(n)
-          [-1..0[: top_k(vocab_size * -top)
-          >=1: top_k(int(top))
-
-        stop_asap=[False] - when set to True, must break and return
-
-        """
-
-        assert top <= self.vocab_size, f'Param top only up to vocab_size: {self.vocab_size}'
-
-        assert len(idx), 'At least a single sample is needed to generate'
-
-        if top >= -1. and top < 0.:
-            top = max(1, int(self.vocab_size * -top))
-
-        for i in range(max_new_tokens):
-            # if the sequence context is growing too long we must crop it at block_size
-            idx_cond = idx if idx.size(1) <= self.block_size else idx[:, -self.block_size:]
-
-            # forward the model to get the logits for the index in the sequence
-            logits, _ = self(idx_cond)
-            
-            # pluck the logits at the final step and scale by desired temperature
-            logits = logits[:, -1, :] / temperature
-
-            if top >= 1.: # top_k: optionally crop the logits to only the top k options
-                v, _ = torch.topk(logits, k=int(top))
-                logits[logits < v[:, [-1]]] = -float('Inf')
-
-            elif top > 0: # top_p: keep only above cummulative probability
-                logits = top_p(logits, top)
-
-            # apply softmax to convert logits to (normalized) probabilities
-            probs = F.softmax(logits, dim=-1)
-
-            # either sample from the distribution or take the most likely element
-            if do_sample:
-                idx_next = torch.multinomial(probs, num_samples=1)
-            else: # take best prob
-                _, idx_next = torch.topk(probs, k=1, dim=-1)
-
-
-            stop=0
-            if token_callback is not None:
-                stop = token_callback(idx_next, islast=not bool(max_new_tokens-1-i)) or 0
-
-            if stop == -1: # don't add and break
-                break
-
-            # append sampled index to the running sequence and continue
-            idx = torch.cat((idx, idx_next), dim=1)
-
-            if stop == 1: # added then break
-                break
-
-            if stop_asap is not None and stop_asap[0]:
-                break
-
-        return idx
-
+    def get_num_params(self):
+        # report number of parameters (note we don't count the decoder parameters in lm_head)
+        return sum(p.numel() for p in self.transformer.parameters())
 
 
     def free_memory(self):
@@ -364,6 +376,9 @@ class GPT(nn.Module):
             torch.cuda.empty_cache()
 
         self.zero_grad(set_to_none=True)
+
+
+
 
 
 
@@ -391,12 +406,20 @@ class CausalSelfAttention(nn.Module):
         self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd)
         # output projection
         self.c_proj = nn.Linear(config.n_embd, config.n_embd)
+
         # regularization
-        self.attn_dropout = nn.Dropout(config.dropout)
         self.resid_dropout = nn.Dropout(config.dropout)
-        # causal mask to ensure that attention is only applied to the left in the input sequence
-        self.register_buffer("bias", torch.tril(torch.ones(config.block_size, config.block_size))
-                                     .view(1, 1, config.block_size, config.block_size))
+
+        # scaled_dot_product_attention() is only available in torch 2
+        self.flash = config.flash_attn and hasattr(F, 'scaled_dot_product_attention')
+        if self.flash:
+            self.attn_dropout_value = config.dropout # dropout is done inside scaled_dot_product_attention()
+        else:
+            self.attn_dropout = nn.Dropout(config.dropout)
+            # causal mask to ensure that attention is only applied to the left in the input sequence
+            self.register_buffer("bias", torch.tril(torch.ones(config.block_size, config.block_size))
+                                         .view(1, 1, config.block_size, config.block_size))
+
         self.n_head = config.n_head
         self.n_embd = config.n_embd
 
@@ -410,11 +433,16 @@ class CausalSelfAttention(nn.Module):
         v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
 
         # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
-        att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
-        att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))
-        att = F.softmax(att, dim=-1)
-        att = self.attn_dropout(att)
-        y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
+        if self.flash:
+            # efficient attention using torch's Flash Attention kernels
+            y = F.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=self.attn_dropout_value if self.training else 0., is_causal=True)
+        else:
+            att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
+            att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))
+            att = F.softmax(att, dim=-1)
+            att = self.attn_dropout(att)
+            y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
+
         y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
 
         # output projection

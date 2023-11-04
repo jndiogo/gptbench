@@ -10,7 +10,7 @@ import numpy as np
 from .model import GPT
 from .trainer import Trainer
 
-from .config import LogFlag, empty_config, full_default_config, checkpoint_load, checkpoint_exists, dataset_get_default_config, dataset_class_from_name, DATASET_CLASS_MAP
+from .config import LogFlag, empty_config, full_default_config, checkpoint_load, checkpoint_exists, dataset_get_default_config, dataset_class_from_name, DATASET_CLASS_MAP, loss_load, loss_plot
 
 from .conf import Conf
 from .utils import print_sepline, set_all_random_seeds, str_dict_from_str
@@ -44,14 +44,16 @@ class Sample:
         
         c.setup('emit_after', None, str, 'When sampling, only emit after this text has been seen')
         
-        c.setup('emit_before', None, str, 'When sampling, stop before emitting this. With flush=1 only works for single chars')
+        c.setup('emit_before', None, str, 'When sampling, stop before emitting this. If both emit_before and emit_until are set, emit_before is used. With flush=1 only works for single chars')
 
+        c.setup('emit_until', None, str, 'When sampling, stop after emitting this, but still display it. If both emit_before and emit_until are set, emit_until is used. With flush=1 only works for single chars')
         
         c.setup('flush', True, bool, 'When sampling, should each token display immediately?')
 
         c.setup('eot_stop', 0, int, "Should generation stop when dataset's special End-Of-Text token is emitted? 0=don't stop, -1=stop before, 1=stop after (and display it)")
 
-        c.setup('top', 0., float, 'Top_k or top_p filtering: 0: off,  ]0..1]: top_p,  [-1..0[: top_k(vocab_size * -top),  >=1: top_k(int(n))')
+        c.setup('top', 0., float, 'Top_k or top_p (nucleus) filtering: 0: off (default),  1: most probable,  ]0..1[: top_p(n) sampling,  >1: top_k(int(n)) sampling,  [-1..0[: top_k(vocab_size * -n) (vocab_size -ratio). Examples - to keep only the most probable entry: 1 (top_k), to sample from 40 most probable: 40 (top_k), to sample from top 60% of accumulated probabilities: 0.6 (top_p)')
+
         c.setup('temp',  1., float, "Temperature")
 
 
@@ -89,8 +91,17 @@ class Sample:
         self._init(init_type, over_config, name)
 
 
-    def load(self, over_config=None, name=None):
+
+    def load(self, over_config=None, name=None, model_block_size=None):
+        """ model_block_size is config's model.block_size, for cropping loaded model """
+
+        if model_block_size is not None:
+            if over_config is None:
+                over_config = empty_config()
+            over_config.model.block_size = model_block_size
+
         self._init('resume', over_config, name)
+
 
     def can_load(self, name=None):
         if name is not None:
@@ -203,13 +214,15 @@ class Sample:
         # model init
         if init_type == 'new' or init_type == 'resume':
 
+            initial_block_size = None
+
             if init_type == 'new':
                 self.log(LogFlag.INIT, f"Initializing new model {self.name}")
 
                 model_state_dict = None
 
 
-            else: # load checkpoint
+            else: # 'resume' -> load checkpoint
                 from .train import Train
 
                 self.log(LogFlag.INIT, f"Loading checkpoint from {self.path}")
@@ -229,12 +242,18 @@ class Sample:
                 #if not os.path.isfile(config.dataset.train_path):
                 #    config.dataset.train_path = None
 
+                # block_size cropping? If over_config has block_size value, it will be used to crop
+                if over_config.model.get('block_size', None) is not None:
+                    if over_config.model.block_size != self.config.model.block_size:
+                        initial_block_size = self.config.model.block_size # save model's initial size
+
 
             # finally update global config from users's over_config, for the final resolved config
             self.config.update(over_config)
     
             # load datasets
             (self.train_dataset, self.val_dataset) = self._load_datasets()
+
 
             # ensure right vocab_size
             if init_type == 'resume':
@@ -246,15 +265,26 @@ class Sample:
                 self.log(LogFlag.INIT, f"Checkpoint: iter={iter_num} ({epoch:.3f} epoch), loss train={self.state['train_loss']:.4f} val={self.state['val_loss']:.4f} eval->{self.state['eval_loss']:.4f}")
 
                 assert self.config.model.vocab_size == self.train_dataset.get_vocab_size(), f"Model vocab_size ({self.config.model.vocab_size}) != Dataset vocab_size ({self.train_dataset.get_vocab_size()})"
-
             else:
                 self.config.model.vocab_size = self.train_dataset.get_vocab_size()
 
+
+            # model must be created with initial_block_size so that any loaded state can be loaded
+            if initial_block_size is not None:
+                final_block_size = self.config.model.block_size
+                self.config.model.block_size = initial_block_size
 
             self.model = GPT(self.config.model)
 
             if model_state_dict is not None:
                 self.model.load_state_dict( model_state_dict )
+
+            # if needed, crop and restore final block size now that model is initialized
+            if initial_block_size is not None:
+                self.log(LogFlag.INIT, f"Cropping model's block_size to {final_block_size} (from {initial_block_size})")
+                self.model.crop_block_size(final_block_size)
+                self.config.model.block_size = final_block_size
+
 
 
         elif init_type.startswith('gpt'):
@@ -264,8 +294,22 @@ class Sample:
             # update from over_config
             self.config.update(over_config)
 
+            # crop block_size?
+            if self.config.model.get('block_size', None) is not None:
+                final_block_size = self.config.model.block_size
+            else:
+                final_block_size = None
+
             # will set config.model.* parameters as needed
             self.model, self.config.model = GPT.from_pretrained(init_type, self.config.model)
+
+            # crop block_size and correct model config
+            if final_block_size is not None:
+                if final_block_size != self.config.model.block_size:
+                    self.log(LogFlag.INIT, f"Cropping model's block_size to {final_block_size} (from {self.config.model.block_size})")
+                    self.model.crop_block_size(final_block_size)
+                    self.config.model.block_size = final_block_size
+
 
             # auto fill empty dataset as GPT2TokensDataset:
             if self.config.dataset.class_name is None:
@@ -275,7 +319,7 @@ class Sample:
             (self.train_dataset, self.val_dataset) = self._load_datasets()
 
             # ensure right vocab_size
-            self.config.model.vocab_size = self.train_dataset.get_vocab_size()
+            assert self.config.model.vocab_size == self.train_dataset.get_vocab_size(), "Dataset and model configs should have the same vocab_size"
 
 
 
@@ -300,6 +344,8 @@ class Sample:
             self.config.sample.emit_after = self.config.sample.emit_after.replace("\\n", "\n")
         if self.config.sample.emit_before is not None:
             self.config.sample.emit_before = self.config.sample.emit_before.replace("\\n", "\n")
+        if self.config.sample.emit_until is not None:
+            self.config.sample.emit_until = self.config.sample.emit_until.replace("\\n", "\n")
 
 
 
@@ -384,6 +430,7 @@ class Sample:
                                               start_text, 
                                               emit_after=sample_config.emit_after,
                                               emit_before=sample_config.emit_before,
+                                              emit_until=sample_config.emit_until,
                                               emit_start=sample_config.emit_start,
 
                                               eot_stop=sample_config.eot_stop,
@@ -414,6 +461,7 @@ class Sample:
                                  start_text, 
                                  emit_after=sample_config.emit_after,
                                  emit_before=sample_config.emit_before,
+                                 emit_until=sample_config.emit_until,
                                  emit_start=sample_config.emit_start,
 
                                  eot_stop=sample_config.eot_stop, flush=sample_config.flush,
@@ -576,6 +624,7 @@ class Sample:
                           start_text_list,
                           emit_after=None,
                           emit_before=None,
+                          emit_until=None,
                           emit_start=True,
 
                           eot_stop=0,
@@ -586,7 +635,7 @@ class Sample:
                            
                           stop_asap=None):
 
-        """ Split start_text_list into same sized batches, generate each one then asseble back in order """
+        """ Split start_text_list into same sized batches, generate each one then assemble back in order """
 
         assert isinstance(start_text_list,list), "start_text_list must be a list of strings"
 
@@ -626,6 +675,7 @@ class Sample:
                                      part_lst, 
                                      emit_after=emit_after,
                                      emit_before=emit_before,
+                                     emit_until=emit_until,
                                      emit_start=emit_start,
 
                                      eot_stop=eot_stop, flush=False,
@@ -664,6 +714,7 @@ class Sample:
                         start_text,
                         emit_after=None,
                         emit_before=None,
+                        emit_until=None,
                         emit_start=1,
 
                         eot_stop=0, flush=True,
@@ -680,6 +731,16 @@ class Sample:
 
         """
         DEB = False
+
+        # emit_stop: one of before/until:
+        if emit_until is not None:
+            emit_stop = emit_until
+        elif emit_before is not None:
+            emit_stop = emit_before
+        else:
+            emit_stop = None
+
+        emit_stop_display = emit_until is not None
 
         # don't limit: if flush: count = 1
 
@@ -703,7 +764,7 @@ class Sample:
         emitting = [emit_after is None] * text_count
         emitted = [False] * text_count # any emission before?
 
-        if DEB: print(start_text, text_count, repeat_count, emit_start, emit_after, emit_before)
+        if DEB: print(start_text, text_count, repeat_count, emit_start, emit_after, emit_stop)
 
 
         def emit_callback(idx, islast):
@@ -723,8 +784,9 @@ class Sample:
 
                 token_id = idx[ib]
 
-                if eot_stop==-1 and token_id == eot_token:
+                if token_id == eot_token and eot_stop==-1:
                     emitting[ib] = False
+                    new_chars_list[ib] = '' # so that it's not emitted in flush:
                     continue
 
                 # should start emitting?
@@ -754,22 +816,25 @@ class Sample:
                     if not emitted[ib]: # not yet emitted
                         emitted[ib]=True
 
-                    if emit_before is not None:
+                    if emit_stop is not None:
                         acc_buffer = chars_buffer[ib] + new_chars_list[ib]
 
-                        if (index := acc_buffer.rfind(emit_before)) != -1:
+                        if (index := acc_buffer.rfind(emit_stop)) != -1:
                             chars_buffer[ib]=chars_buffer[ib][:index]
                             rem = index - len(acc_buffer) # rem is negative
                             new_chars_list[ib]=new_chars_list[ib][:rem]
+
+                            if emit_stop_display: # also display stop char
+                                new_chars_list[ib] += emit_stop
                             emitting[ib] = False
                             continue
 
                     # accumulate
                     chars_buffer[ib] += new_chars_list[ib]
 
-                    if eot_stop==1 and token_id == eot_token:
+                    if token_id == eot_token and eot_stop==1:
                         emitting[ib] = False
-                        continue
+                        continue # already emited
 
                 else:
                     new_chars_list[ib] = ''
@@ -802,7 +867,8 @@ class Sample:
         x = x.repeat([count, 1])
         """
 
-        y = self.model.generate(ix, max_len, temperature=temp, do_sample=True, top=top, 
+        y = self.model.generate(ix, max_len, 
+                                top=top, temperature=temp, 
                                 token_callback=emit_callback,
                                 stop_asap=stop_asap)
 
@@ -1081,6 +1147,9 @@ class Sample:
     def get_config(self):
         return copy.deepcopy(self.config)
 
+    def print_config(self, verbose=1):
+        print(self.config.dump(verbose))
+
     def get_trained_sample_count(self):
         return self.state['n_samples']
 
@@ -1130,10 +1199,6 @@ class Sample:
 
         if dataset_config.class_name is not None:
 
-            block_size = self.config.model.block_size
-
-            assert block_size is not None, "Must set config.model.block_size"
-
             try:
                 cls = dataset_class_from_name(dataset_config.class_name)
             except KeyError:
@@ -1152,6 +1217,8 @@ class Sample:
             else:
                 kwargs = {}
 
+            block_size = self.config.model.block_size
+            assert block_size is not None, "Must set config.model.block_size"
 
             # normalize path to forward slashes
             return cls.load_train_val_datasets(block_size,
@@ -1168,6 +1235,7 @@ class Sample:
 
         else:
             raise RuntimeError("Dataset must be defined in config's dataset.* or by calling set_dataset()")
+
 
 
     def _get_valid_start_text(self, start_text, dataset, warn):
@@ -1197,6 +1265,17 @@ class Sample:
 
 
 
+    def plot_loss(self, path=None, title=None):
+        """
+        Saves an image file with the chart at path, or displays it if path is None
+        """
+        loss_arr = loss_load(self.log_path)
+        assert len(loss_arr), "Must train first to have losses that can be ploted"
+
+        if title is None:
+            title = self.name
+            
+        loss_plot(loss_arr, path=path, title=title)
 
 
 

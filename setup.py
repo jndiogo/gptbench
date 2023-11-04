@@ -1,13 +1,14 @@
 from setuptools import setup
 
 setup(name='GPTbench',
-      version='0.1.0',
+      version='0.2.0',
       author='Jorge Diogo',
       packages=['gptbench'],
-      description='A workbench to train and sample from GPT-2 level models. Based on Andrej Karpathy\'s minGPT',
+      description='A workbench to train, sample and measure GPT-2 level models',
       license='MIT',
       install_requires=[
             'numpy',
+            'matplotlib',
             'torch',
             'tiktoken',
             'transformers' # to load pretrained GPT-2 models

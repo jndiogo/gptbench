@@ -2,7 +2,7 @@
 The Train class can do model training and also inference as it derives from the Sample class.
 """
 
-import os, sys, signal, json, copy
+import os, sys, signal, json, copy, csv
 
 import torch
 from torch.utils.tensorboard import SummaryWriter
@@ -12,7 +12,7 @@ from .sample import Sample, LogFlag, DEFAULT_NAME, DEFAULT_WORK_DIR
 from .model import GPT
 from .trainer import Trainer
 
-from .config import checkpoint_save, loss_append, loss_trim, LogFlag
+from .config import checkpoint_save, loss_append, loss_trim, loss_load, loss_plot, LogFlag
 
 from .conf import Conf
 from .utils import print_sepline, cuda_max_memory_init, cuda_max_memory
@@ -37,7 +37,7 @@ class Train(Sample):
 
         c.setup('eval_save_checkpt', 1, int, 'When to save a checkpoint: 0=never, 1=on new lower evaluated loss, 2=always')
 
-        c.setup('eval_save_loss', 'csv,tensorboard', str, "Multiple values allowed, separated with comma: 'csv' saves a loss.csv, 'tensorboard' creates tensorboard logs")
+        c.setup('eval_save_loss', 'csv,plot,tensorboard', str, "Loss logging into checkpoint's logs folder. Multiple values allowed, separated with comma: 'csv' saves a loss.csv, 'plot' plots a loss chart to loss.png, 'tensorboard' creates tensorboard logs")
 
 
         return c
@@ -156,13 +156,17 @@ class Train(Sample):
 
 
 
-        if self.config.train.eval_save_loss is not None:
+        if self.config.train.eval_save_loss:
+
+            if 'plot' in self.config.train.eval_save_loss:
+                # plot needs csv output
+                if 'csv' not in self.config.train.eval_save_loss: self.config.train.eval_save_loss+=',csv'
 
             if 'csv' in self.config.train.eval_save_loss:
                 iter_num = Trainer.iter_from_sample(self.state['n_samples'], 
                                                     self.config.trainer.batch_size)
                 # trim loss at iter_num
-                loss_trim(self.log_path, iter_num if iter_num > 0 else None)
+                loss_trim(self.log_path, iter_num if iter_num > 1 else None)
 
             if 'tensorboard' in self.config.train.eval_save_loss:
                 if self._tensorboard_writer:
@@ -181,6 +185,10 @@ class Train(Sample):
 
         self.trainer.run(run_iter_count=iter_count)
 
+        # final stats
+        iter_count = self.trainer.get_run_iter_num()
+        iter_dur = self.trainer.run_last_dur / iter_count
+        self.log(LogFlag.TRAIN_FINAL, f"Training finished: duration={self.trainer.run_last_dur:.1f}s iter_duration={iter_dur:.2f}s iter_count={iter_count}")
 
         self.config.train = saved_train_config
 
@@ -251,6 +259,10 @@ class Train(Sample):
                 if 'csv' in train_config.eval_save_loss:
                     loss_append(train.log_path, [(iter_num, train_loss, val_loss)] )
 
+                    if 'plot' in train_config.eval_save_loss:
+                        loss_arr = loss_load(train.log_path)
+                        loss_plot(loss_arr, path_prefix=train.log_path, title=train.name)
+
                 if 'tensorboard' in train_config.eval_save_loss:
                     train._tensorboard_writer.add_scalar('Loss/train', train_loss, iter_num)
                     train._tensorboard_writer.add_scalar('Loss/val', val_loss, iter_num)
@@ -284,7 +296,7 @@ class Train(Sample):
             if self._loaded_optimizer_state_dict is not None: # loaded
                 optimizer_state_dict = self._loaded_optimizer_state_dict
             else:
-                raise RuntimeError("Must load() or train() before saving")
+                optimizer_state_dict = None
         else:
             optimizer_state_dict = self.trainer.optimizer.state_dict()
 

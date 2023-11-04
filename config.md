@@ -38,10 +38,11 @@ All settings below are accessed with sample.*, for example sample.max_len.
 |start_text_sep|When used in start_text, this char separates multiple start strings. Default is pipe character '\|'|
 |emit_start|When sampling, emit start_text? Only if emit_after is None|
 |emit_after|When sampling, only emit after this text has been seen|
-|emit_before|When sampling, stop before emitting this. With flush=1 only works for single chars|
+|emit_before|When sampling, stop before emitting this. If both emit_before and emit_until are set, emit_before is used. With flush=1 only works for single chars|
+|emit_until|When sampling, stop after emitting this, but still display it. If both emit_before and emit_until are set, emit_until is used. With flush=1 only works for single chars|
 |flush|When sampling, should each token display immediately?|
 |eot_stop|Should generation stop when dataset's special End-Of-Text token is emitted? 0=don't stop, -1=stop before, 1=stop after (and display it)|
-|top|Top_k or top_p filtering: 0: off,  ]0..1]: top_p,  [-1..0[: top_k(vocab_size * -top),  >=1: top_k(int(n))|
+|top|Top_k or top_p (nucleus) filtering: 0: off (default),  1: most probable,  ]0..1[: top_p(n) sampling,  >1: top_k(int(n)) sampling,  [-1..0[: top_k(vocab_size * -n) (vocab_size -ratio). Examples - to keep only the most probable entry: 1 (top_k), to sample from 40 most probable: 40 (top_k), to sample from top 60% of accumulated probabilities: 0.6 (top_p)|
 |temp|Temperature|
 |max_batch_size|Maximum batch size when inferring in parallel with multiple start text. None means same as trainer.batch_size config entry|
 |multiline_prompt|On prompt mode: input multiple lines until a Ctrl+D or Ctrl+Z (in Windows)|
@@ -52,11 +53,11 @@ Train config section controls evaluation options, when you call the train() meth
 
 |Name | Info |
 |-----|------|
-eval_period|In batch iterations: each n batches we eval and check if saving model. 0 for none|
+|eval_period|In batch iterations: each n batches we eval and check if saving model. 0 for none|
 |eval_type|How to estimate loss -> 0: on train data, 1: on val data (or train if no val dataset), ]0,1[: weighted average of train and val (or train only if no val dataset|
 |eval_iters|Count of batch_size iterations for loss evaluation|
 |eval_save_checkpt|When to save a checkpoint: 0=never, 1=on new lower evaluated loss, 2=always|
-|eval_save_loss|Multiple values allowed, separated with comma: 'csv' saves a loss.csv, 'tensorboard' creates tensorboard logs|
+|eval_save_loss|Loss logging into checkpoint's logs folder. Multiple values allowed, separated with comma: 'csv' saves a loss.csv, 'plot' plots a loss chart to loss.png, 'tensorboard' creates tensorboard logs|
 
 
 ## Dataset
@@ -82,8 +83,9 @@ Model controls the GPT2 model settings:
 |n_head|Number of attention heads|
 |n_embd|Number of embedding dimensions. Must be a multiple of n_head|
 |vocab_size|Size of the vocabulary. Must be set from dataset in use|
-|block_size|Block size: number of vocabulary items processed at a time. Must be set|
+|block_size|The number of vocabulary items processed at a time. If set before loading or initializing from a pretrained model, will crop the loaded block_size|
 |dropout|Dropout hyperparameter|
+|flash_attn|Use the more efficient Flash Attention method, on torch 2+ and supporting devices|
 
 
 ## Trainer
@@ -93,7 +95,7 @@ The trainer config section controls optimizer and other training parameters:
 |-----|------|
 |batch_size|Size of the batch in each forward training iteration|
 |accum_size|Size for batch gradient accumulation, allowing for larger batch sizes with lower memory usage. Setting batch_size must be a multiple of accum_size. For example: batch_size=32, accum_size=4 will simulate a batch of 32 by accumulating gradients on 8 batches of 4 rows|
-|n_workers|DataLoader workers. In Windows setting to above 0 causes a long delay when calling iter().|
+|n_workers|DataLoader workers. In Windows setting to greater than 0 causes a long delay when calling iter().|
 |max_samples|Absolute maximum limit on training samples. Negative -n for number of epochs|
 |grad_norm_clip|Clip gradients to this norm|
 |optimizer|Optimizer type: 'sgd' or 'adamw'|

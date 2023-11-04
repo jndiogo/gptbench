@@ -12,6 +12,8 @@ from .chardataset import CharDataset, CharLineDataset
 
 from .conf import Conf
 
+from .utils import plot_loss_chart
+
 
 
 # -----------------------------------------------------------------------------
@@ -74,7 +76,7 @@ def full_default_config():
 
     c = empty_config()
 
-    c.setup('seed', -1, int, "Random seed. 0 means choose a random initial seed, -1 means don't set seed")
+    c.setup('seed', -1, int, "Initialize random number generator. Either an integer seed or: 0=set seed to a random number, -1=don't initialize")
 
     # sample
     c.sample = Sample.get_default_config()
@@ -147,20 +149,28 @@ def merge_config_from_sysargv(sys_argv, base_config=None):
 
 
 # -----------------------------------------------------------------------------
-CHECKPOINT_VERSION = 1
+CHECKPOINT_VERSION = 2
 
 def checkpoint_load(path_prefix, load_optimizer_state:bool):
     """ """
 
     model_state_dict = torch.load(path_prefix + "model.pt")
-    if load_optimizer_state:
-        optimizer_state_dict = torch.load(path_prefix + "optimizer.pt")
+
+    opti_path = path_prefix + "optimizer.pt"
+    if load_optimizer_state and os.path.isfile(opti_path):
+        optimizer_state_dict = torch.load(opti_path)
     else:
         optimizer_state_dict = None
 
     with open(path_prefix + 'state.json', 'r', encoding='utf-8') as f:
         js = f.read()
     j = json.loads(js)
+
+
+    # patch older versions for newer features
+    if j['_version'] < 2:
+        j['config']['model']['flash_attn'] = False # Flash Attention didn't exist before checkpoint version 2
+
 
     return (j['state'], j['config'],
             model_state_dict, optimizer_state_dict)
@@ -178,7 +188,8 @@ def checkpoint_save(path_prefix,
     signal.signal(signal.SIGINT, signal.SIG_IGN)
 
     torch.save(model_state_dict, path_prefix + "model.pt")
-    torch.save(optimizer_state_dict, path_prefix + "optimizer.pt")
+    if optimizer_state_dict is not None:
+        torch.save(optimizer_state_dict, path_prefix + "optimizer.pt")
 
     # config json
     d = {'state': state_dict,
@@ -207,16 +218,20 @@ def checkpoint_exists(path_prefix):
 
 
 LOSS_LOG_FILENAME = 'loss.csv'
+LOSS_CHART_FILENAME = 'loss.png'
 
 def loss_load(path_prefix):
-    with open(path_prefix + LOSS_LOG_FILENAME, 'r') as f:
-        lines = [line[:-1] for line in f]
-
     out = []
 
-    for line in lines:
-        t=line.split(',')
-        out.append(t)
+    try:
+        with open(path_prefix + LOSS_LOG_FILENAME, 'r') as f:
+            lines = [line[:-1] for line in f]
+
+        for line in lines:
+            t=line.split(',')
+            out.append(t)
+    except OSError:
+        ...     
 
     return out
 
@@ -244,9 +259,8 @@ def loss_trim(path_prefix, last_iter_num):
             f.write('')
         return
 
-    try:
-        l = loss_load(path)
-    except OSError:
+    l = loss_load(path)
+    if len(l) == 0: # empty or non-existent: nothing to do
         return
 
     loss_list = []
@@ -269,7 +283,18 @@ def loss_trim(path_prefix, last_iter_num):
             f.write('\n')
 
 
+def loss_plot(loss_arr, path=None, path_prefix=None, title=None):
+    """
+    Saves a chart image file, or displays if path and path_prefix are None
+    """
+    if path is not None:
+        dest = path
+    elif path_prefix is not None:
+        dest = path_prefix + LOSS_CHART_FILENAME
+    else:
+        dest = None
 
+    plot_loss_chart(loss_arr, dest=dest, title=title)
 
 
 
@@ -284,7 +309,8 @@ class LogFlag(IntFlag):
 
     TRAIN_ITER = 4
     TRAIN_EVAL = 8
-    TRAIN = TRAIN_ITER | TRAIN_EVAL
+    TRAIN_FINAL = 16
+    TRAIN = TRAIN_ITER | TRAIN_EVAL | TRAIN_FINAL
 
     CUDA_MEMORY = 256
 

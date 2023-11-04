@@ -25,7 +25,7 @@ class Trainer:
         c.setup('accum_size', None, int, 'Size for batch gradient accumulation, allowing for larger batch sizes with lower memory usage. Setting batch_size must be a multiple of accum_size. For example: batch_size=32, accum_size=4 will simulate a batch of 32 by training 8 batches of 4 rows')
 
         # dataloader parameters
-        c.setup('n_workers', 0, int, 'DataLoader workers. In Windows setting to above 0 causes a long delay when calling iter().')
+        c.setup('n_workers', 0, int, 'DataLoader workers. In Windows setting to greater than 0 causes a long delay when calling iter().')
 
         c.setup('max_samples', None, int, 'Absolute maximum limit on training samples. Negative -n for number of epochs')
 
@@ -61,8 +61,10 @@ class Trainer:
         self.sample_num = self.start_sample_num = start_sample_num
         self.run_sample_num = 0
 
-        self.iter_time = 0.0
-        self.iter_dt = 0.0
+        self.run_start_time = self.run_last_dur = 0
+        self.iter_last_dur = 0
+
+
 
 
     def set_optimizer(self, optimizer, optimizer_state_dict=None):
@@ -178,7 +180,9 @@ class Trainer:
 
         self.run_sample_num = 0 # the sample number of the current train() call
         self.last_loss = float('inf')
-        self.iter_time = time.time()
+
+        self.run_start_time = iter_start_time = time.time()
+        self.run_last_dur = self.iter_last_dur = 0
         
         while True:
 
@@ -248,8 +252,8 @@ class Trainer:
 
 
             tnow = time.time()
-            self.iter_dt = tnow - self.iter_time
-            self.iter_time = tnow
+            self.iter_last_dur = tnow - iter_start_time
+            iter_start_time = tnow
 
 
             # termination conditions
@@ -259,4 +263,7 @@ class Trainer:
                 break
             if max_samples is not None and self.sample_num >= max_samples:
                 break
+
+
+        self.run_last_dur = time.time() - self.run_start_time 
 

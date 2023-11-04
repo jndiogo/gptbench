@@ -1,14 +1,18 @@
 # Projects
 
-These projects include examples with Jupyter notebooks or python scripts:
+These projects include examples with Jupyter notebooks and/or python scripts:
 
 - [add](add/): Can the model learn how to add two 2 digit numbers? How well will it generalize for unseen sequences?
 
 - [continue](continue/): Complete English text directly from a pretrained GPT2 checkpoint or training a model from scratch
 
+- [fine-tuning](fine-tuning/): Fine-tuning experiments on GPT-2
+
 - [misc](misc/): A folder for miscellaneous experiments
 
-- [perplexity](perplexity/): Calculate perplexity of GPT-2 model over wikitext-2
+- [perplexity](perplexity/): Calculate the perplexity of GPT-2 model over wikitext-2 data
+
+- [prompting](prompting/): Translate French to English by prompting
 
 - [roman](roman/): Train a transformer model to convert decimal numbers to/from roman numerals, ex: 56=LVI or IC=99
 
@@ -17,4 +21,4 @@ These projects include examples with Jupyter notebooks or python scripts:
 
 Directory [data](data/) contains data files loaded into the datasets.
 
-Datasets are either included or are generated or downloaded by scripts at [dataprep](dataprep/).
+Datasets are either included or are generated/downloaded by scripts at [dataprep](dataprep/).

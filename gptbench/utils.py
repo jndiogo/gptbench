@@ -1,4 +1,5 @@
 import os, sys, random, json, gc
+import matplotlib.pyplot as plt
 
 import torch
 from torch.nn import functional as F
@@ -56,14 +57,20 @@ def die(msg=None, exit_code=1):
 
 
 
-# top_p or nucleus sampling: cuts values with probability mass > p. 0.1. 
-# example: 0.1=only top 10% probable values, 0.9=90% of the most probable values
 # adapted from Hugging Face transformers' top_k_top_p_filtering()
 # https://github.com/huggingface/transformers
 # https://huggingface.co/transformers/v3.2.0/_modules/transformers/generation_utils.html
 def top_p(logits, top_p, min_tokens_to_keep=1):
+    """
+    Top_p or nucleus sampling: only top most probable tokens with accumulated probabilities up to top_p are kept for sampling. 
+    At least min_tokens_to_keep are preserved.
 
-    assert top_p < 1.0, "0 < top_p < 1"
+    Example:
+    0.4: (more picky) only 40% top probabilities (mass) are kept (or min_tokens_to_keep)
+    0.9: (less picky) all of the top 90% accumulated probabilities are kept.
+    """
+
+    assert top_p > 0. and top_p < 1.0, "0 < top_p < 1"
 
     # sort descending
     sorted_logits, sorted_indices = torch.sort(logits, descending=True)
@@ -89,7 +96,38 @@ def top_p(logits, top_p, min_tokens_to_keep=1):
 
 
 
-       
+
+def plot_loss_chart(loss_arr, dest=None, title=None, dpi=200):
+    """
+    loss_arr: iter_num,train_loss or iter_num,train_loss,val_loss
+    dest: None to plt.show() or path to image file for saving
+    """
+
+    iters = [int(e[0]) for e in loss_arr]
+    train_loss = [float(e[1]) for e in loss_arr]
+    val_loss = [float(e[2]) for e in loss_arr] if len(loss_arr[0]) > 2 else None
+
+
+    plt.figure(dpi=dpi)
+    if title is not None:
+        plt.title(title)
+        
+    plt.plot(iters,train_loss, label='train', linewidth=1, color='blue', marker=".")
+    if val_loss:
+        plt.plot(iters,val_loss, label='validation', linewidth=1, color='green', marker=".") # , linestyle='--'
+
+    plt.xlabel("Iterations")
+    # plt.xticks(iters)
+    plt.ylabel("Loss")
+
+    plt.legend(loc="upper right")
+    #plt.ylim(0.)
+
+    if dest is not None:
+        plt.savefig(dest)
+        plt.close()
+    else:
+        plt.show()
 
 
 
