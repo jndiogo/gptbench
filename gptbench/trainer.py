@@ -267,3 +267,5 @@ class Trainer:
 
         self.run_last_dur = time.time() - self.run_start_time 
 
+        # back to eval mode
+        model.eval()

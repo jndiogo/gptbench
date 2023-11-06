@@ -34,7 +34,7 @@ All settings below are accessed with sample.*, for example sample.max_len.
 |-----|------|
 |max_len|Max generated token count|
 |count|How many times to generate from the same start_text|
-|start_text|Starting text for generation. None: use random vocabulary item on each sampling. A str with starting text.If separated with start_text_sep multiple star_text are used (count is set to 1)|
+|start_text|Starting text for generation. None: use random vocabulary item on each sampling. A str with starting text.If separated with start_text_sep, multiple star_text are used (config.count is set to 1)|
 |start_text_sep|When used in start_text, this char separates multiple start strings. Default is pipe character '\|'|
 |emit_start|When sampling, emit start_text? Only if emit_after is None|
 |emit_after|When sampling, only emit after this text has been seen|
@@ -45,7 +45,7 @@ All settings below are accessed with sample.*, for example sample.max_len.
 |top|Top_k or top_p (nucleus) filtering: 0: off (default),  1: most probable,  ]0..1[: top_p(n) sampling,  >1: top_k(int(n)) sampling,  [-1..0[: top_k(vocab_size * -n) (vocab_size -ratio). Examples - to keep only the most probable entry: 1 (top_k), to sample from 40 most probable: 40 (top_k), to sample from top 60% of accumulated probabilities: 0.6 (top_p)|
 |temp|Temperature|
 |max_batch_size|Maximum batch size when inferring in parallel with multiple start text. None means same as trainer.batch_size config entry|
-|multiline_prompt|On prompt mode: input multiple lines until a Ctrl+D or Ctrl+Z (in Windows)|
+|multiline_prompt|In prompt() mode only: input multiple lines until a Ctrl+D (or Ctrl+Z in Windows). Doesn't work in Jupyter notebooks|
 
 
 ## Train

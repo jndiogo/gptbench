@@ -35,7 +35,7 @@ class Sample:
         c.setup('count', 1, int, 'How many times to generate from the same start_text')
 
 
-        c.setup('start_text', None, str, 'Starting text for generation. None: use random vocabulary item on each sampling. A str with starting text.If separated with start_text_sep multiple star_text are used (count is set to 1)')
+        c.setup('start_text', None, str, 'Starting text for generation. None: use random vocabulary item on each sampling. A str with starting text.If separated with start_text_sep, multiple star_text are used (config.count is set to 1)')
 
         c.setup('start_text_sep', '|', str, 'When used in start_text, this char separates multiple start strings')
 
@@ -59,7 +59,7 @@ class Sample:
 
         c.setup('max_batch_size', None, int, "Maximum batch size when inferring in parallel with multiple start text. None means same as trainer.batch_size config entry")
 
-        c.setup('multiline_prompt', False, bool, 'On prompt mode: input multiple lines until a Ctrl+D or Ctrl+Z (in Windows)')
+        c.setup('multiline_prompt', False, bool, "In prompt() mode only: input multiple lines until a Ctrl+D (or Ctrl+Z in Windows). Doesn't work in Jupyter notebooks")
 
         return c
 
@@ -321,6 +321,8 @@ class Sample:
             # ensure right vocab_size
             assert self.config.model.vocab_size == self.train_dataset.get_vocab_size(), "Dataset and model configs should have the same vocab_size"
 
+        # important: start model in eval mode, only the Trainer will change it to training mode and back again
+        self.model.eval()
 
 
         self.log(LogFlag.INIT, f"Dataset train_path: {self.config.dataset.train_path if self.config.dataset.train_path else 'dummy empty dataset'}, val_path: {self.config.dataset.val_path}, train_split: {self.config.dataset.train_split}, vocab_size: {self.train_dataset.get_vocab_size()}")
@@ -485,14 +487,15 @@ class Sample:
 
         """ """
 
-        allowed_cmds = [
-        'help',
-        'quit',
-        'config'
-        'seed',
-        ]
+        non_config_cmds = {
+        'file': "Load start text from file and generate",
+        'config': "Display current config entries",
+        'seed': "Set random generator seeds",
+        'quit': "Terminate prompt input",
+        'help': "Display this help",
+        }
 
-        allowed_cmds += Sample.get_default_config().keys()
+        allowed_cmds = list(non_config_cmds.keys()) + list(Sample.get_default_config().keys())
 
 
         print("Prompt mode: press Enter (single line mode), or Ctrl+D / Ctrl+Z (multiline mode) to submit starting text. Enter -help for available commands.")
@@ -522,10 +525,16 @@ class Sample:
 
 
         def print_help():
-            print("Help: Enter sampling start text or a command in the form -cmd or -cmd=val.")
+            print("Help: Enter sampling start text (use \\n for newline) or a command in the form -cmd or -cmd=val.")
             print("Possible commands:", ', '.join(["'-" + c + "'" for c in allowed_cmds]), "\n")
-            print("=== Commands, values and help (prefix with '-' to use, ex: -cmd=1) ==================")
+
+            print("=== Commands (prefix with '-' -> ex: -paste or -seed=1) ========================")
+            for k,v in non_config_cmds.items():
+                print(f"{k} - {v}")
+
+            print("\nSettings from config.sample (set with -name=value):")
             Sample.get_default_config().help()
+
             print("=====================================================================================\n")
             print("Press Ctrl+C once to stop generation.")
 
@@ -557,6 +566,7 @@ class Sample:
                 p = p.strip()
                 cmds = p.split(' ')
 
+                generate = True
                 quit = False
                 for c in cmds:
                     if c.startswith('-'):
@@ -572,37 +582,51 @@ class Sample:
 
                     if k == 'help' or k not in allowed_cmds:
                         print_help()
+                        generate = False
                         break
 
                     elif k == 'quit':
                         print("Quitting")
                         quit = True
+                        generate = False
                         break
 
                     elif k == 'seed':
                         self.set_seed(int(v))
+                        generate = False
 
                     elif k == 'config':
                         print("Config:")
                         print(self.config.dump(int(v)))
+                        generate = False
+
+                    elif k == 'file':
+                        try:
+                            with open(v, "r", encoding='utf-8') as f:
+                                p = f.read()
+                        except OSError as e:
+                            print(f"Error - {e}")
+                            generate = False
 
                     else:
                         cmd_list = [ '-' + k + '=' + v ]
                         sample_config.update_from_args(cmd_list)
+                        generate = False
 
                 if quit:
                     break
-            else:
-                start_text = p.replace("\\n", "\n")
 
-                stop_asap = [False]
-                signal.signal(signal.SIGINT, signal_handler)
+                if generate:
+                    start_text = p.replace("\\n", "\n")
 
-                self.sample(start_text, stop_asap=stop_asap, **sample_config.to_dict())
+                    stop_asap = [False]
+                    signal.signal(signal.SIGINT, signal_handler)
 
-                signal.signal(signal.SIGINT, original_sigint)
+                    self.sample(start_text, stop_asap=stop_asap, **sample_config.to_dict())
 
-                print()
+                    signal.signal(signal.SIGINT, original_sigint)
+
+                    print()
 
 
 
@@ -1035,12 +1059,17 @@ class Sample:
 
 
     @torch.no_grad()
-    def measure_loss(self, dataset, stride=-1, max_batch_size=None):
+    def measure_loss(self, dataset=None, stride=-1, max_batch_size=None):
         """
         stride: measurements are done at block_size blocks. stride controls how to advance along the dataset at each evaluation. if > 0: sample position increment, 0..-1: -ratio of block size, for example -1 means increment a block_size on each evaluation.
         """
 
         assert self.model is not None, "No model set"
+
+        if dataset is None:
+            dataset = self.train_dataset
+
+        assert dataset is not None, "No dataset"
 
         block_size = self.model.block_size
 
@@ -1109,35 +1138,90 @@ class Sample:
 
 
 
+
+# ----------------------------------------------------------------------------- Raw model helpers
+
     @torch.no_grad()
-    def model_forward(self, text):
+    def model_logits(self, text=None, text_tokens=None, dataset=None):
         """
-        No config.sample settings are used here.
-        Returns logits,loss.
+        Straight to model, no config.sample settings are used here.
+        Returns logits with shape=(C).
         """
 
-        idx = self.train_dataset.encode(text)
+        assert self.model is not None, "No model set"
 
-        assert len(idx) <= self.model.block_size, f"Can only forward up to model.block_size {self.model.block_size} tokens, text has {len(idx)}"
+        if dataset is None:
+            dataset = self.train_dataset
+        assert dataset is not None, "No dataset"
 
-        x = torch.tensor(idx, dtype=torch.long).to(self.model.device)
-        y = torch.empty(x.shape, dtype=torch.long).to(self.model.device)
-        y[:-1]=torch.as_tensor(idx[1:])
-        y[-1]=-1
+        assert (text is not None) ^ (text_tokens is not None), "One of text or text_tokens must be given"
+
+        if text is not None:
+            text_tokens = dataset.encode(text)
+
+        assert len(text_tokens) <= self.model.block_size, f"Can only forward up to model.block_size {self.model.block_size} tokens, text has {len(text_tokens)}"
+
+        x = torch.tensor(text_tokens, dtype=torch.long).to(self.model.device)
+
+        logits,_ = self.model(x.unsqueeze(0))
+
+        return logits[0, -1, :] # shape=(1,T,C) isolate the last T -> returns shape=(C)
+
+
+
+    @torch.no_grad()
+    def model_probs(self, text=None, text_tokens=None, dataset=None):
+        """
+        Straight to model, no config.sample settings are used here.
+        Returns probs with shape=(C).
+        """
+
+        assert (text is not None) ^ (text_tokens is not None), "One of text or text_tokens must be given"
+
+        if dataset is None:
+            dataset = self.train_dataset
+        assert dataset is not None, "No dataset"
+
+        if text is not None:
+            text_tokens = dataset.encode(text)
+
+        logits = self.model_logits(text_tokens=text_tokens, dataset=dataset)
+
+        return torch.softmax(logits, dim=-1)
+
+
+
+    @torch.no_grad()
+    def model_next(self, top_count, text=None, text_tokens=None, dataset=None):
+        """
+        Straight to model, no config.sample settings are used here.
+        Generate next token and return a list with count tuples of (prob, token_text, token_id), in descending order.
+        """
+        assert (text is not None) ^ (text_tokens is not None), "One of text or text_tokens must be given"
+
+        if dataset is None:
+            dataset = self.train_dataset
+        assert dataset is not None, "No dataset"
+
+        if text is not None:
+            text_tokens = dataset.encode(text)
+
+
+        probs = self.model_probs(text_tokens=text_tokens, dataset=dataset)
+
+        values, indices = torch.topk(probs, top_count, dim=-1, sorted=True)
+
+        out = []
+        for i in range(values.shape[-1]):
+            id = indices[i].item()
+            out.append((values[i].item(), dataset.decode(id), id)) # prob, token_text, token_id
         
-        return self.model(x.unsqueeze(0),y.unsqueeze(0))
+        return out
 
 
-    @torch.no_grad()
-    def model_forward_argmax(self, text):
-        """
-        No config.sample settings are used here.
-        Returns argmax,decoded text from argmax(logits)
-        """
 
-        logits,_ = self.model_forward(text)
-        am = logits.argmax(dim=-1)
-        return am, self.train_dataset.decode(am[0].tolist())
+
+
 
 
 

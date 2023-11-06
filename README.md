@@ -33,7 +33,7 @@ pip install -e .
 
 ## Projects
 
-Check the [Projects](projects/readme.md), which include several examples, from toy data/models to promping and fine-tuning pretrained GPT-2 models.
+Check the [Projects](projects/readme.md), which include several examples, from toy data/models to prompting and fine-tuning pretrained GPT-2 models.
 
 
 
