@@ -1,7 +1,7 @@
 from setuptools import setup
 
 setup(name='GPTbench',
-      version='0.2.0',
+      version='0.3.0',
       author='Jorge Diogo',
       packages=['gptbench'],
       description='A workbench to train, sample and measure GPT-2 level models',

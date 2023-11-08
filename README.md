@@ -9,7 +9,7 @@ GPTBench can be used to conveniently train a large or small transformer model an
 - Model sampling is simple and also includes a prompt mode where you can continuously interact with the model. 
 - You can train it starting from a blank model or from a pretrained GPT-2. Checkpoints can be loaded and saved at any point.
 - Can measure accuracy, perplexity and loss metrics and can log training evaluations to .csv and TensorBoard formats.
-- Can be used in Python scripts or Jupyter notebooks or directly from the command line.
+- Usable in Python scripts or Jupyter notebooks or directly from the command line.
 - Includes several [Projects](projects/readme.md): training character-level and GPT2 token level datasets, toy models for learning to add two numbers, decimal-roman numeral translation, predicting number sequences. Also common tasks like prompting and fine-tuning GPT-2 level models.
 - Includes Flash Attention and can train with gradient accumulation, so that larger batch sizes can be used in common GPUs.
 

@@ -10,7 +10,7 @@ These projects include examples with Jupyter notebooks and/or python scripts:
 
 - [misc](misc/): A folder for miscellaneous experiments: GPT-2 perplexity measurement, next token probabilities
 
-- [prompting](prompting/): Translate French to English by prompting
+- [prompting](prompting/): Several projects following the GPT-2 paper experiments on prompting: French to English translation, text summarization, Winogrande commonsense reasoning and reading comprehension.
 
 - [roman](roman/): Train a transformer model to convert decimal numbers to/from roman numerals, ex: 56=LVI or IC=99
 

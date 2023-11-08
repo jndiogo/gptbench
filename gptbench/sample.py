@@ -374,10 +374,12 @@ class Sample:
                **over_sample_config_kwargs):
 
         """
+        Sample from the model, starting from a given start_text, using sample-* config settings.
+
+        start_text can be a string or an array of strings for batch sampling. If a string, it can be separated by sample.start_text_sep characters, to also generate in batch.
+        dest can be 'print' to print() generated text, or a list to receive generated text.
         stop_asap=[False] - when set to True, sample will stop and return.
-
-        over_sample_config_kwargs: key values to override config.sample settings (and any over_sample_config).
-
+        over_sample_config_kwargs: key values to override config.sample settings.
         """
 
         # save sample config so that any overrides are local here
@@ -1139,7 +1141,7 @@ class Sample:
 
 
 
-# ----------------------------------------------------------------------------- Raw model helpers
+# ----------------------------------------------------------------------------- Raw model helpers/utilities
 
     @torch.no_grad()
     def model_logits(self, text=None, text_tokens=None, dataset=None):
@@ -1170,10 +1172,12 @@ class Sample:
 
 
     @torch.no_grad()
-    def model_probs(self, text=None, text_tokens=None, dataset=None):
+    def model_probs(self,
+                    text=None, text_tokens=None, # pass one of these two
+                    dataset=None):
         """
+        Returns vocabulary probs with shape=(C) for next token after text/text_tokens, .
         Straight to model, no config.sample settings are used here.
-        Returns probs with shape=(C).
         """
 
         assert (text is not None) ^ (text_tokens is not None), "One of text or text_tokens must be given"
@@ -1192,10 +1196,12 @@ class Sample:
 
 
     @torch.no_grad()
-    def model_next(self, top_count, text=None, text_tokens=None, dataset=None):
+    def model_next(self, top_count, 
+                   text=None, text_tokens=None, # pass one of these two
+                   dataset=None):
         """
-        Straight to model, no config.sample settings are used here.
         Generate next token and return a list with count tuples of (prob, token_text, token_id), in descending order.
+        Straight to model, no config.sample settings are used here.
         """
         assert (text is not None) ^ (text_tokens is not None), "One of text or text_tokens must be given"
 
@@ -1220,8 +1226,40 @@ class Sample:
 
 
 
+    @torch.no_grad()
+    def model_next_probs(self,
+                         text=None, text_tokens=None, # pass one of these two
+                         next_text=None, next_text_tokens=None, # pass one of these two
+                         dataset=None):
+        """
+        Returns a list with the conditional probabilities of each next_text_tokens being generated starting with text_tokens.
+        After probability is calculated, each next_text_tokens is added to text_tokens for the next round.
+        """
 
+        assert (text is not None) ^ (text_tokens is not None), "One of text or text_tokens must be given"
+        assert (next_text is not None) ^ (next_text_tokens is not None), "One of next_text or next_text_tokens must be given"
 
+        if dataset is None:
+            dataset = self.train_dataset
+        assert dataset is not None, "No dataset"
+
+        if text is not None:
+            text_tokens = dataset.encode(text)
+        else:
+            text_tokens = text_tokens[:] # copy as we'll be expanding it next tokens
+
+        if next_text is not None:
+            next_text_tokens = dataset.encode(next_text)
+
+        out = []
+
+        for t in next_text_tokens:
+            probs = self.model_probs(text_tokens=text_tokens)
+            p_t = probs[t].item() # the probability that text_tokens are followed by token t
+            out.append(p_t) # store t's probability
+            text_tokens.append(t) # and append the nex token for next generation
+
+        return out
 
 
 
